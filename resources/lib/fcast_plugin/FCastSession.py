@@ -28,6 +28,12 @@ class OpCode(int, Enum):
     VERSION = 11
     PING = 12
     PONG = 13
+    INITIAL = 14
+    PLAYUPDATE=15
+    SETPLAYLISTITEM = 16
+    SUBSCRIBEEVENT = 17
+    UNSUBSCRIBEEVENT = 18
+    EVENT = 19
 
 class Event(str, Enum):
     PLAY = "play"
@@ -40,7 +46,7 @@ class Event(str, Enum):
 
 LENGTH_BYTES = 4
 MAXIMUM_PACKET_LENGTH = 32000
-FCAST_VERSION = 1
+FCAST_VERSION = 2
 
 class FCastSession:
 
@@ -54,6 +60,9 @@ class FCastSession:
     def __init__(self, client: socket.socket):
         self.client = client
         self.state = SessionState.WAITING_FOR_LENGTH
+        #send initial version message
+        self.__send(OpCode.VERSION, VersionMessage(version=FCAST_VERSION))
+
 
     def close(self):
         if self.client:
@@ -67,12 +76,19 @@ class FCastSession:
     def send_volume_update(self, value: VolumeUpdateMessage):
         self.__send(OpCode.VOLUME_UPDATE, value)
 
+    def sendOpCode(self,opcode:OpCode):
+        self.__send(opcode)
+
     def __send(self, opcode: OpCode, message = None):
+
+        def default(o):
+            return o.__dict__
+
         if not self.client:
             return
 
         # FCast packet header
-        json_message = json.dumps(message.__dict__) if message else None
+        json_message = json.dumps(message,default=default) if message else None
         body_size = (len(json_message) if json_message else 0) + 1
         header = struct.pack("<IB", body_size, opcode.value)
 

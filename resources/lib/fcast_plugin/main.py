@@ -46,8 +46,8 @@ def check_player():
         if player and player.isPlaying():
             # Update the current time if it has changed
             if int(player.getTime()) != player.prev_time:
-                player.onPlayBackTimeChanged()        
-        
+                player.onPlayBackTimeChanged()
+
         if monitor.waitForAbort(0.05):
             break
     log("Exiting player thread")
@@ -75,6 +75,12 @@ def handle_play(session: FCastSession, message = None):
             play_item.setProperty('inputstream', 'inputstream.adaptive')
             play_item.setProperty('inputstream.adaptive.manifest_type', 'hls')
             play_item.setProperty('inputstream.adaptive.stream_selection_type', 'adaptive')
+        elif message.container in ['application/dash+xml', 'application/xml+dash']:
+            log('Detected DASH stream in URL')
+            play_item.setContentLookup(False)
+            play_item.setMimeType(message.container)
+            play_item.setProperty('inputstream', 'inputstream.adaptive')
+            play_item.setProperty('inputstream.adaptive.manifest_type', 'mpd')
         else:
             log('Detected URL')
             if message.container:

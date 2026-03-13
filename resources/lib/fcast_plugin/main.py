@@ -1,5 +1,5 @@
 import sys
-import math
+import json
 import socket
 from threading import Thread
 from typing import List, Optional
@@ -162,9 +162,9 @@ def handle_volume(session: FCastSession, message: SetVolumeMessage):
 
 # NOTE: For SetTempo (fine-grained speed) to work, "Sync playback to display"
 # must be enabled: Settings -> Player -> Videos -> Sync playback to display
-VALID_SPEEDS = [-32, -16, -8, -4, -2, 1, 2, 4, 8, 16, 32]
-TEMPO_MIN = 0.75
-TEMPO_MAX = 1.55
+
+TEMPO_MIN = 0.8
+TEMPO_MAX = 1.5
 
 def handle_speed(session: FCastSession, message: SetSpeedMessage):
     global player
@@ -186,24 +186,14 @@ def handle_speed(session: FCastSession, message: SetSpeedMessage):
             return
         player_id = players[0]["playerid"]
 
-        if TEMPO_MIN <= speed <= TEMPO_MAX:
-            response = xbmc.executeJSONRPC(json.dumps({
-                "jsonrpc": "2.0",
-                "method": "Player.SetTempo",
-                "params": {"playerid": player_id, "tempo": speed},
-                "id": 1
-            }))
-            log(f"Player.SetTempo({speed}) response: {response}")
-        else:
-            snapped = min(VALID_SPEEDS, key=lambda v: abs(v - speed))
-            log(f"Speed {speed} outside tempo range, snapping to {snapped}")
-            response = xbmc.executeJSONRPC(json.dumps({
-                "jsonrpc": "2.0",
-                "method": "Player.SetSpeed",
-                "params": {"playerid": player_id, "speed": snapped},
-                "id": 1
-            }))
-            log(f"Player.SetSpeed({snapped}) response: {response}")
+        clamped = min(max(TEMPO_MIN, speed), TEMPO_MAX)
+        response = xbmc.executeJSONRPC(json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Player.SetTempo",
+            "params": {"playerid": player_id, "tempo": clamped},
+            "id": 1
+        }))
+        log(f"Player.SetTempo({clamped}) response: {response}")
 
     except Exception as e:
         log(f"Error setting speed: {e}")

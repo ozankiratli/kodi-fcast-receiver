@@ -13,6 +13,7 @@ from .FCastPackets import *
 from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
 from .util import log, notify, debounce
+from .mdns import register as mdns_register, unregister as mdns_unregister
 
 session_threads: List[Thread] = []
 sessions: List[FCastSession] = []
@@ -229,6 +230,7 @@ def main():
     try:
         s.bind((FCAST_HOST, FCAST_PORT))
         s.listen()
+        mdns_register()
     except:
         notify("Bind failed", xbmcgui.NOTIFICATION_ERROR)
         s.close()
@@ -261,6 +263,7 @@ def main():
         if monitor.waitForAbort(0.250):
             break
 
+    mdns_unregister()
     s.close()
 
     http_server.stop()

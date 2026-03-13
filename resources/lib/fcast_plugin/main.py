@@ -1,4 +1,5 @@
 import sys
+import math
 import socket
 from threading import Thread
 from typing import List, Optional
@@ -159,9 +160,53 @@ def handle_volume(session: FCastSession, message: SetVolumeMessage):
     volume_level = int(message.volume * 100)
     xbmc.executebuiltin(f'SetVolume({volume_level})')
 
+# NOTE: For SetTempo (fine-grained speed) to work, "Sync playback to display"
+# must be enabled: Settings -> Player -> Videos -> Sync playback to display
+VALID_SPEEDS = [-32, -16, -8, -4, -2, 1, 2, 4, 8, 16, 32]
+TEMPO_MIN = 0.75
+TEMPO_MAX = 1.55
+
 def handle_speed(session: FCastSession, message: SetSpeedMessage):
     global player
-    log(f"Client request set speed at {message.speed}. Action currently not supported")
+    speed = message.speed
+    log(f"Client request set speed at {speed}")
+
+    if not (player and player.isPlaying()):
+        return
+
+    try:
+        result = json.loads(xbmc.executeJSONRPC(json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Player.GetActivePlayers",
+            "id": 1
+        })))
+        players = result.get("result", [])
+        if not players:
+            log("No active players found for SetSpeed")
+            return
+        player_id = players[0]["playerid"]
+
+        if TEMPO_MIN <= speed <= TEMPO_MAX:
+            response = xbmc.executeJSONRPC(json.dumps({
+                "jsonrpc": "2.0",
+                "method": "Player.SetTempo",
+                "params": {"playerid": player_id, "tempo": speed},
+                "id": 1
+            }))
+            log(f"Player.SetTempo({speed}) response: {response}")
+        else:
+            snapped = min(VALID_SPEEDS, key=lambda v: abs(v - speed))
+            log(f"Speed {speed} outside tempo range, snapping to {snapped}")
+            response = xbmc.executeJSONRPC(json.dumps({
+                "jsonrpc": "2.0",
+                "method": "Player.SetSpeed",
+                "params": {"playerid": player_id, "speed": snapped},
+                "id": 1
+            }))
+            log(f"Player.SetSpeed({snapped}) response: {response}")
+
+    except Exception as e:
+        log(f"Error setting speed: {e}")
 
 # Connection handler thread function
 def connection_handler(conn: socket.socket, addr):
@@ -179,8 +224,7 @@ def connection_handler(conn: socket.socket, addr):
     session.on(Event.SEEK, handle_seek)
     # TODO: Find out how to get/set volume
     # session.on(Event.SET_VOLUME, handle_volume)
-    # TODO: Find out how to get/set playback speed
-    # session.on(Event.SET_SPEED, handle_speed)
+    session.on(Event.SET_SPEED, handle_speed)
 
     # Allow Kodi to send playback update packets to this client
     if player:

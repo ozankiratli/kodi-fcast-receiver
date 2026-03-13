@@ -84,6 +84,12 @@ def handle_play(session: FCastSession, message = None):
         else:
             log('Detected URL')
             if message.container:
+                # TODO: Image containers (e.g. image/jpeg, image/png) are not handled separately.
+                # CastLab sends photos with an image MIME type and they fall through here,
+                # causing Kodi to treat them as video. The result is the image displays for
+                # only ~4ms before the player closes. Needs a dedicated image display path
+                # (e.g. xbmc.executebuiltin("ShowPicture(...)") or a slideshow ListItem).
+                # This needs investigation as it might be an error on CastLab app.
                 play_item.setContentLookup(False)
                 play_item.setMimeType(message.container)
             else:

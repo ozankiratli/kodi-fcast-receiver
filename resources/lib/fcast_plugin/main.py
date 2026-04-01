@@ -117,6 +117,7 @@ def handle_play(session: FCastSession, message = None):
         play_item.setPath(url)
         if player.isPlaying():
             player.stop()
+        player.start_time = float(message.time) if message.time else 0.0
         player.play(item=url, listitem=play_item)
 
 def do_seek():

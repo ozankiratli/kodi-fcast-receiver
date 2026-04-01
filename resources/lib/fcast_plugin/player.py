@@ -29,7 +29,10 @@ class FCastPlayer(xbmc.Player):
     def onAVStarted(self) -> None:
         log("Playback started")
         self.is_paused = False
-        # Start time loop once the player is active
+        if self.start_time > 0.0:
+            log(f"Seeking to start time {self.start_time}")
+            self.seekTime(self.start_time)
+            self.start_time = 0.0
         self.onPlayBackTimeChanged()
 
     def onPlayBackStopped(self) -> None:

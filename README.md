@@ -27,22 +27,18 @@ The original addon by c4valli has not been updated for over 9 months and is curr
 * **Speed control clamping** — Playback speed is now clamped to the range supported by Kodi (0.8x – 1.5x). Requests below 0.8x are rounded up and requests above 1.5x are rounded down, preventing out-of-range errors.
 * **mDNS / device discovery** — The receiver now broadcasts via mDNS so it is discoverable by sender devices on the local network.
 * **CastLab compatibility** — Resolved a compatibility issue with the Android CastLab app. CastLab support is currently in **beta**.
+* **Playback position sync** — Streams now start at the current playback position of the sending device.
 
 ### Known Issues
 
 * **Stream cancellation freeze** — Cancelling a stream occasionally causes Kodi to freeze. Clearing the queue or cache restores a stable connection, but the root cause has not yet been investigated.
 * **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently, breaking A/V sync.
-* **No playback position sync** — Streams always start from the beginning; the current playback position of the sending device is not synced to Kodi.
 
 ## Configuration
 
-Enable the following Kodi setting for best results:
+Enable the following Kodi setting for functionality:
 
 * **Settings → Player → Videos → Sync playback to display** — set to **On**
-
-## Pre-Release Available
-
-A testing version of the addon is available: [v0.0.1-alpha](https://github.com/wolf3592/kodi-fcast-receiver/releases/tag/v0.0.1-alpha).
 
 ## Acknowledgments
 

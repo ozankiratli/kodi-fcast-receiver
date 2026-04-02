@@ -58,6 +58,7 @@ class FCastSession:
     __listeners: Dict[str, List[Callable[[Any, Any], Any]]] = {}
 
     def __init__(self, client: socket.socket):
+        self.__listeners = {} 
         self.client = client
         self.state = SessionState.WAITING_FOR_LENGTH
         #send initial version message

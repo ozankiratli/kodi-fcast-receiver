@@ -28,10 +28,10 @@ The original addon by c4valli has not been updated for over 9 months and is curr
 * **mDNS / device discovery** — The receiver now broadcasts via mDNS so it is discoverable by sender devices on the local network.
 * **CastLab compatibility** — Resolved a compatibility issue with the Android CastLab app. CastLab support is currently in **beta**.
 * **Playback position sync** — Streams now start at the current playback position of the sending device.
+* **Stream cancellation freeze** — Cancelling a stream occasionally caused Kodi to freeze. This is now resolved. 
 
 ### Known Issues
 
-* **Stream cancellation freeze** — Cancelling a stream occasionally causes Kodi to freeze. Clearing the queue or cache restores a stable connection, but the root cause has not yet been investigated.
 * **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently, breaking A/V sync.
 
 ## Configuration

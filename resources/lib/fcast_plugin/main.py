@@ -115,10 +115,19 @@ def handle_play(session: FCastSession, message = None):
     if player and play_item:
         notify('Starting player ...')
         play_item.setPath(url)
-        if player.isPlaying():
-            player.stop()
-        player.start_time = float(message.time) if message.time else 0.0
-        player.play(item=url, listitem=play_item)
+        start_time = float(message.time) if message.time else 0.0
+
+        def do_play():
+            if player.isPlaying():
+                player.stop()
+                timeout = 50  # 5 seconds max
+                while player.isPlaying() and timeout > 0:
+                    xbmc.sleep(100)
+                    timeout -= 1
+            player.start_time = start_time
+            player.play(item=url, listitem=play_item)
+
+        Thread(target=do_play).start()
 
 def do_seek():
     global player, seeks
@@ -149,11 +158,13 @@ def handle_seek(session: FCastSession, message = None):
     # Ensure that player.seekTime is called with a low frequency. This prevents Kodi from freezing
     debounce(do_seek, 0.15)()
 
-def handle_stop(session: FCastPlayer, message = None):
+def handle_stop(session: FCastSession, message = None):
     global player
     log(f"Client request stop")
     if player:
-        player.stop()
+        def do_stop():
+            xbmc.executebuiltin('PlayerControl(Stop)')
+        Thread(target=do_stop).start()
 
 def handle_pause(session: FCastPlayer, message = None):
     global player

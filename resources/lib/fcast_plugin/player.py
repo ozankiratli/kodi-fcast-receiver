@@ -36,6 +36,7 @@ class FCastPlayer(xbmc.Player):
         self.onPlayBackTimeChanged()
 
     def onPlayBackStopped(self) -> None:
+        xbmc.executebuiltin('PlayerControl(Stop)')
         self.onPlayBackEnded()
 
     def onPlayBackPaused(self) -> None:
@@ -46,22 +47,22 @@ class FCastPlayer(xbmc.Player):
         self.is_paused = False
 
     def onPlayBackEnded(self) -> None:
+        xbmc.executebuiltin('PlayerControl(Stop)')
         for session in self.sessions:
             session.sendOpCode(opcode=OpCode.STOP)
 
     def onPlayBackError(self) -> None:
+        xbmc.executebuiltin('PlayerControl(Stop)')
         self.onPlayBackEnded()
 
     def onPlayBackSpeedChanged(self, speed: int) -> None:
         self.playback_speed = speed
 
-    # Not overriden
     def onPlayBackTimeChanged(self) -> None:
-        time_int = int(self.getTime())
-        duration=int(self.getTotalTime())
         self.prev_time = int(self.getTime())
+        duration=int(self.getTotalTime())
         pb_message = PlayBackUpdateMessage(
-            time_int,
+            self.prev_time,
             PlayBackState.PAUSED if self.is_paused else PlayBackState.PLAYING,
             speed=self.playback_speed,
             duration=duration

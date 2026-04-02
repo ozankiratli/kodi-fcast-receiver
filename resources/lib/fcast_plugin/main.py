@@ -119,7 +119,7 @@ def handle_play(session: FCastSession, message = None):
 
         def do_play():
             if player.isPlaying():
-                player.stop()
+                xbmc.executebuiltin('PlayerControl(Stop)')
                 timeout = 50  # 5 seconds max
                 while player.isPlaying() and timeout > 0:
                     xbmc.sleep(100)

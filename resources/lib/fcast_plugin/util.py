@@ -15,14 +15,10 @@ def log(msg, level=xbmc.LOGDEBUG):
 
 # Trottle repeated attempts at a function call
 def debounce(func, wait):
-    class _debounce:
-        timer: Timer
-
-        @staticmethod
-        def debounced(*args, **kwargs):
-            _debounce.timer.cancel()
-            _debounce.timer = Timer(wait, func, args=args, kwargs=kwargs)
-            _debounce.timer.start()
-
-    _debounce.timer = Timer(0, lambda: None)  # Initial dummy timer
-    return _debounce.debounced
+    timer = [None]
+    def debounced(*args, **kwargs):
+        if timer[0]:
+            timer[0].cancel()
+        timer[0] = Timer(wait, func, args=args, kwargs=kwargs)
+        timer[0].start()
+    return debounced

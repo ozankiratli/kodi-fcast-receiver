@@ -1,5 +1,5 @@
 NAME=kodi-fcast-receiver
-VERSION=0.0.1
+VERSION=0.1.0-beta
 SOURCE_DIR=$(shell basename `pwd`)
 TARGET_DIR=$(shell basename `pwd`)/dist
 TARGET_ZIP=${NAME}-${VERSION}.zip

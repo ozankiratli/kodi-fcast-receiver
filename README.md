@@ -12,14 +12,6 @@ Official web site: [fcast.org](https://fcast.org)
 
 This add-on is an unofficial FCast receiver for Kodi. It allows you to stream content from any FCast client to Kodi media center.
 
-## Status
-
-The original addon by c4valli has not been updated for over 9 months and is currently non-functional. This fork aims to:
-
-* Restore functionality by fixing broken features.
-* Ensure compatibility with the latest Kodi versions (e.g., Kodi 21 "Omega").
-* Provide ongoing maintenance and updates.
-
 ## Changes in This Fork
 
 ### Fixed

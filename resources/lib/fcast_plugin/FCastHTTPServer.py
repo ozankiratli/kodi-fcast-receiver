@@ -1,4 +1,3 @@
-
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 from typing import cast, Dict, Optional

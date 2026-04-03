@@ -55,7 +55,7 @@ class FCastPlayer(xbmc.Player):
         xbmc.executebuiltin('PlayerControl(Stop)')
         self.onPlayBackEnded()
 
-    def onPlayBackSpeedChanged(self, speed: int) -> None:
+    def onPlayBackSpeedChanged(self, speed: float) -> None:
         self.playback_speed = speed
 
     def onPlayBackTimeChanged(self) -> None:

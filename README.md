@@ -24,11 +24,11 @@ This add-on is an unofficial FCast receiver for Kodi. It allows you to stream co
 
 ### Known Issues
 
-* **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently, breaking A/V sync.
+* **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently, breaking A/V sync. This might be related to an open Kodi issue (xbmc/xbmc#22625). Still needs more investigation.
 
 ## Configuration
 
-Enable the following Kodi setting for functionality:
+Enable the following Kodi setting for speed control:
 
 * **Settings → Player → Videos → Sync playback to display** — set to **On**
 

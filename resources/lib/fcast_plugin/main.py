@@ -6,10 +6,10 @@ from typing import List, Optional
 import xbmcgui
 import xbmc
 import selectors
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from pathlib import Path
 
-from .FCastSession import Event, FCastSession
+from .FCastSession import Event, FCastSession, FCAST_VERSION
 from .FCastPackets import *
 from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
@@ -25,7 +25,7 @@ FCAST_PORT = 46899
 FCAST_TIMEOUT = 60 * 1000
 FCAST_BUFFER_SIZE = 32000
 
-plugin_handle = int(sys.argv[1]) if len(sys.argv) > 1 else None
+plugin_handle = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else None
 
 player_thread: Optional[Thread] = None
 
@@ -52,6 +52,67 @@ def check_player():
             break
     log("Exiting player thread")
 
+# Containers that mean "adaptive streaming manifest" rather than a media file.
+# Senders are inconsistent about which spelling they use, so match them all.
+HLS_CONTAINERS = frozenset([
+    'application/vnd.apple.mpegurl',
+    'application/x-mpegurl',
+    'application/mpegurl',
+    'audio/mpegurl',
+    'audio/x-mpegurl',
+])
+DASH_CONTAINERS = frozenset([
+    'application/dash+xml',
+    'application/xml+dash',
+])
+
+# What inputstream.adaptive itself expects to see.
+ISA_MIME_TYPES = {'hls': 'application/x-mpegURL', 'mpd': 'application/dash+xml'}
+
+def stream_type(container: Optional[str], url: str = "") -> Optional[str]:
+    """Classify a play request as 'hls', 'mpd', or None for direct playback.
+
+    Prefer the container the sender declared; fall back to the URL extension
+    for senders that omit it.
+    """
+    normalized = (container or '').split(';')[0].strip().lower()
+    if normalized in HLS_CONTAINERS:
+        return 'hls'
+    if normalized in DASH_CONTAINERS:
+        return 'mpd'
+
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix == '.m3u8':
+        return 'hls'
+    if suffix == '.mpd':
+        return 'mpd'
+    return None
+
+def encode_headers(headers) -> str:
+    """Render FCast headers into the urlencoded form Kodi and ISA both expect.
+
+    Senders attach these because the CDN requires them - Grayjay sends the
+    Referer and User-Agent that googlevideo URLs are issued against, and the
+    request 403s without them.
+    """
+    if not headers or not isinstance(headers, dict):
+        return ''
+    return urlencode({str(k): str(v) for k, v in headers.items()})
+
+def apply_inputstream(play_item: xbmcgui.ListItem, kind: str, headers: str) -> None:
+    """Route a manifest through inputstream.adaptive."""
+    play_item.setContentLookup(False)
+    play_item.setMimeType(ISA_MIME_TYPES[kind])
+    play_item.setProperty('inputstream', 'inputstream.adaptive')
+    # Deprecated on Kodi 21 and removed on Kodi 22, where ISA infers the type
+    # from the mime type set above instead. Harmless to keep while we still
+    # support Omega; drop it once Kodi 21 is no longer a target.
+    play_item.setProperty('inputstream.adaptive.manifest_type', kind)
+    play_item.setProperty('inputstream.adaptive.stream_selection_type', 'adaptive')
+    if headers:
+        play_item.setProperty('inputstream.adaptive.manifest_headers', headers)
+        play_item.setProperty('inputstream.adaptive.stream_headers', headers)
+
 def handle_play(session: FCastSession, message = None):
     log(f"Client request play")
     play_item: Optional[xbmcgui.ListItem] = None
@@ -60,29 +121,23 @@ def handle_play(session: FCastSession, message = None):
     if not message:
         return
 
+    headers = encode_headers(message.headers)
+
     if message.url:
         url = message.url
-        parsed_url = urlparse(url)
+        kind = stream_type(message.container, url)
 
         play_item = xbmcgui.ListItem(path=url)
 
-        # Detect HLS stream
-        if Path(parsed_url.path).suffix == '.m3u8':
-            log('Detected HLS stream in URL')
-            # Use inputstream adaptive to handle HLS stream
-            play_item.setContentLookup(False)
-            play_item.setMimeType('application/x-mpegURL')
-            play_item.setProperty('inputstream', 'inputstream.adaptive')
-            play_item.setProperty('inputstream.adaptive.manifest_type', 'hls')
-            play_item.setProperty('inputstream.adaptive.stream_selection_type', 'adaptive')
-        elif message.container in ['application/dash+xml', 'application/xml+dash']:
-            log('Detected DASH stream in URL')
-            play_item.setContentLookup(False)
-            play_item.setMimeType(message.container)
-            play_item.setProperty('inputstream', 'inputstream.adaptive')
-            play_item.setProperty('inputstream.adaptive.manifest_type', 'mpd')
+        if kind:
+            log(f'Detected {kind.upper()} stream in URL')
+            apply_inputstream(play_item, kind, headers)
         else:
             log('Detected URL')
+            if headers:
+                # Direct playback has no header property, so Kodi takes them
+                # appended to the URL itself.
+                url = f'{url}|{headers}'
             if message.container:
                 # TODO: Image containers (e.g. image/jpeg, image/png) are not handled separately.
                 # CastLab sends photos with an image MIME type and they fall through here,
@@ -96,7 +151,8 @@ def handle_play(session: FCastSession, message = None):
                 play_item.setContentLookup(True)
 
     elif message.content:
-        if message.container in ['application/dash+xml', 'application/xml+dash']:
+        kind = stream_type(message.container)
+        if kind == 'mpd':
             log('Detected DASH stream')
 
             if http_server:
@@ -105,10 +161,7 @@ def handle_play(session: FCastSession, message = None):
 
                 # Basing this off what the YouTube addon does to enable dash
                 play_item = xbmcgui.ListItem(path=url)
-                play_item.setContentLookup(False)
-                play_item.setMimeType(message.container)
-                play_item.setProperty('inputstream', 'inputstream.adaptive')
-                play_item.setProperty('inputstream.adaptive.manifest_type', 'mpd')
+                apply_inputstream(play_item, kind, headers)
         else:
             notify(f'Unhandled content container {message.container}')
 
@@ -248,8 +301,13 @@ def connection_handler(conn: socket.socket, addr):
     while not monitor.abortRequested():
         try:
             buff = conn.recv(FCAST_BUFFER_SIZE)
-            if buff and len(buff) > 0:
-                session.process_bytes(buff)
+            if not buff:
+                # A zero-length read on a non-blocking socket means the peer
+                # closed. Without this the thread spins until Kodi exits, and
+                # every reconnect leaks another one.
+                log("Client %s disconnected" % addr[0])
+                break
+            session.process_bytes(buff)
         except BlockingIOError:
             # Normal behavior. Prevents blocking
             pass
@@ -288,7 +346,7 @@ def main():
     try:
         s.bind((FCAST_HOST, FCAST_PORT))
         s.listen()
-        mdns_register()
+        mdns_register(port=FCAST_PORT, protocol_version=FCAST_VERSION)
     except:
         notify("Bind failed", xbmcgui.NOTIFICATION_ERROR)
         s.close()

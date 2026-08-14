@@ -5,10 +5,13 @@ import random
 import socket
 import struct
 import unittest
+from unittest import mock
 
 from context import fcast_plugin  # noqa: F401  (sets up sys.path)
+from fcast_plugin import FCastSession as session_module
 from fcast_plugin.FCastSession import (
     FCAST_VERSION,
+    MAXIMUM_PACKET_LENGTH,
     Event,
     FCastSession,
     OpCode,
@@ -26,9 +29,9 @@ def packet(opcode, body=None):
 class SessionHarness:
     """Drives a FCastSession over a socketpair and records emitted events."""
 
-    def __init__(self):
+    def __init__(self, get_play_data=None):
         self.receiver_sock, self.sender_sock = socket.socketpair()
-        self.session = FCastSession(self.receiver_sock)
+        self.session = FCastSession(self.receiver_sock, get_play_data=get_play_data)
         self.events = []
         for event in Event:
             self.session.on(event, self._record(event))
@@ -179,6 +182,104 @@ class TestVersionNegotiation(unittest.TestCase):
         with SessionHarness() as harness:
             harness.feed(packet(OpCode.VERSION, {"version": 1}))
             self.assertEqual(harness.session.protocol_version, 1)
+
+
+def decode_packets(data):
+    """Split a byte stream into [(opcode, parsed body or None), ...]."""
+    packets, pos = [], 0
+    while pos < len(data):
+        size, opcode = struct.unpack("<IB", data[pos:pos + 5])
+        body = data[pos + 5:pos + 4 + size]
+        packets.append((opcode, json.loads(body) if body else None))
+        pos += 4 + size
+    return packets
+
+
+class TestInitialHandshake(unittest.TestCase):
+    """v3 requires an Initial exchange once both sides know the version.
+
+    Guarded on the negotiated version, so it stays dormant while this receiver
+    still announces v2 and switches on by itself when FCAST_VERSION is raised.
+    """
+
+    def test_no_initial_while_we_announce_v2(self):
+        with SessionHarness() as harness:
+            harness.sent()
+            harness.feed(packet(OpCode.VERSION, {"version": 3}))
+            self.assertEqual(harness.sent(), b"")
+
+    def test_initial_sent_once_both_sides_are_v3(self):
+        with mock.patch.object(session_module, "FCAST_VERSION", 3):
+            with SessionHarness() as harness:
+                harness.sent()
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+
+                packets = decode_packets(harness.sent())
+                self.assertEqual([op for op, _ in packets], [OpCode.INITIAL])
+
+                body = packets[0][1]
+                self.assertTrue(body["displayName"].startswith("Kodi - "))
+                self.assertEqual(body["appName"], "FCast Receiver")
+                self.assertEqual(body["appVersion"], "0.0.0-test")
+                self.assertIsNone(body["playData"])
+
+    def test_initial_is_not_repeated(self):
+        with mock.patch.object(session_module, "FCAST_VERSION", 3):
+            with SessionHarness() as harness:
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+                harness.sent()
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+                self.assertEqual(harness.sent(), b"")
+
+    def test_initial_reports_what_is_already_playing(self):
+        playing = PlayMessage(container="video/mp4", url="https://e/v.mp4", time=42)
+        with mock.patch.object(session_module, "FCAST_VERSION", 3):
+            with SessionHarness(get_play_data=lambda: playing) as harness:
+                harness.sent()
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+
+                body = decode_packets(harness.sent())[0][1]
+                self.assertEqual(body["playData"]["url"], "https://e/v.mp4")
+                self.assertEqual(body["playData"]["time"], 42)
+
+    def test_inline_manifest_is_not_echoed_back(self):
+        # An inline DASH manifest can be tens of kilobytes; echoing it would
+        # breach the 32KB packet ceiling for no benefit.
+        playing = PlayMessage(container="application/dash+xml", content="<MPD>" + "x" * 40000)
+        with mock.patch.object(session_module, "FCAST_VERSION", 3):
+            with SessionHarness(get_play_data=lambda: playing) as harness:
+                harness.sent()
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+
+                sent = harness.sent()
+                self.assertLess(len(sent), MAXIMUM_PACKET_LENGTH)
+                self.assertIsNone(decode_packets(sent)[0][1]["playData"]["content"])
+
+
+class TestPlayUpdate(unittest.TestCase):
+
+    def test_not_sent_to_a_v2_sender(self):
+        with SessionHarness() as harness:
+            harness.feed(packet(OpCode.VERSION, {"version": 2}))
+            harness.sent()
+
+            harness.session.send_play_update(PlayMessage(container="video/mp4", url="https://e/v.mp4"))
+            self.assertEqual(harness.sent(), b"")
+
+    def test_sent_to_a_v3_sender(self):
+        with mock.patch.object(session_module, "FCAST_VERSION", 3):
+            with SessionHarness() as harness:
+                harness.feed(packet(OpCode.VERSION, {"version": 3}))
+                harness.sent()
+
+                harness.session.send_play_update(
+                    PlayMessage(container="video/mp4", url="https://e/v.mp4")
+                )
+
+                opcode, body = decode_packets(harness.sent())[0]
+                self.assertEqual(opcode, OpCode.PLAYUPDATE)
+                self.assertEqual(body["playData"]["url"], "https://e/v.mp4")
+                self.assertIsInstance(body["generationTime"], int)
 
 
 class TestMessageFromJson(unittest.TestCase):

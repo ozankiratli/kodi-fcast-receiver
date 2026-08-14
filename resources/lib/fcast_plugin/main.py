@@ -38,6 +38,25 @@ player: Optional[FCastPlayer] = None
 # Used to queue up seeks
 seeks: list[float] = []
 
+# The Play request currently on screen. Senders that connect later, and the
+# other senders already connected, are told about it so every remote shows the
+# same thing.
+current_play_message: Optional[PlayMessage] = None
+
+def get_current_play_data() -> Optional[PlayMessage]:
+    """What is playing right now, or None if nothing is.
+
+    Gated on the player rather than cleared on stop, so it cannot go stale if
+    playback ends by a route that does not run through us.
+    """
+    if player and player.isPlaying():
+        return current_play_message
+    return None
+
+def broadcast_play_update() -> None:
+    for session in list(sessions):
+        session.send_play_update(get_current_play_data())
+
 def check_player():
     global player
     log("Starting player thread")
@@ -166,9 +185,11 @@ def handle_play(session: FCastSession, message = None):
             notify(f'Unhandled content container {message.container}')
 
     if player and play_item:
+        global current_play_message
         notify('Starting player ...')
         play_item.setPath(url)
         start_time = float(message.time) if message.time else 0.0
+        current_play_message = message
 
         def do_play():
             if player.isPlaying():
@@ -179,6 +200,8 @@ def handle_play(session: FCastSession, message = None):
                     timeout -= 1
             player.start_time = start_time
             player.play(item=url, listitem=play_item)
+            # Every other connected sender needs to know what this one started.
+            broadcast_play_update()
 
         Thread(target=do_play).start()
 
@@ -282,7 +305,7 @@ def connection_handler(conn: socket.socket, addr):
     monitor = xbmc.Monitor()
     notify("Connection from %s" % addr[0])
 
-    session = FCastSession(conn)
+    session = FCastSession(conn, get_play_data=get_current_play_data)
 
     session.on(Event.PLAY, handle_play)
     session.on(Event.STOP, handle_stop)

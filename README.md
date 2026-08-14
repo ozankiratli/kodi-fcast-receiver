@@ -74,7 +74,7 @@ The receiver implements FCast protocol **v2** and announces itself as such. Send
 
 ### Known Issues
 
-* **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently and video stream starts going faster than usual to catch up, breaking A/V sync. This issue occurs on other add-ons too. This might be related to an `inputstream.adaptive` issue or a Kodi issue (see: xbmc/xbmc#22625).
+* **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently while the video speeds up to catch up, breaking A/V sync. This is an `inputstream.adaptive` problem, not a receiver one: it reproduces with any add-on playing adaptive streams, whether or not FCast is involved (see xbmc/xbmc#22625). There is no workaround available from this add-on.
 * **Images are not displayed properly** — CastLab sends photos with an image MIME type, which Kodi treats as video. The image appears for a few milliseconds before the player closes. A dedicated image path is needed.
 
 ## Development

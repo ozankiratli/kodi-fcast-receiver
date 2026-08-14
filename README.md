@@ -43,6 +43,8 @@ Kodi checks for updates on its own schedule as long as **Settings → System →
 
 Grab the zip from the [releases page](https://github.com/ozankiratli/kodi-fcast-receiver/releases) and use **Settings → Add-ons → Install from zip file**. Updates are then manual.
 
+**Already running a zip install?** A zip install has no repository behind it, so Kodi has nothing to check for new versions. Install the repository as described above and Kodi will pick up newer releases for the add-on you already have — there is no need to uninstall it first.
+
 ## Configuration
 
 Enable the following Kodi setting for speed control:

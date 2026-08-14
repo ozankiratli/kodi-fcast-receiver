@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 import xbmc
 
 from .FCastPackets import *
-from .util import log
+from .util import log, addonname, addonversion
 
 class SessionState(int, Enum):
     IDLE = 0
@@ -86,12 +86,19 @@ class FCastSession:
     peer_version: int = 1
     protocol_version: int = 1
 
+    # Whether the v3 Initial handshake has been completed for this session.
+    sent_initial: bool = False
+
     __listeners: Dict[str, List[Callable[[Any, Any], Any]]] = {}
 
-    def __init__(self, client: socket.socket):
+    def __init__(self, client: socket.socket, get_play_data=None):
         self.__listeners = {}
         self.client = client
         self.state = SessionState.WAITING_FOR_LENGTH
+        self.sent_initial = False
+        # Lets a newly connected sender learn what is already playing, without
+        # this module needing to know how playback state is tracked.
+        self.__get_play_data = get_play_data
         #send initial version message
         self.__send(OpCode.VERSION, VersionMessage(version=FCAST_VERSION))
 
@@ -107,6 +114,17 @@ class FCastSession:
 
     def send_volume_update(self, value: VolumeUpdateMessage):
         self.__send(OpCode.VOLUME_UPDATE, value)
+
+    def send_playback_error(self, value: PlaybackErrorMessage):
+        self.__send(OpCode.PLAYBACK_ERROR, value)
+
+    def send_play_update(self, play_data: Optional[PlayMessage]):
+        """Tell this sender what is now playing, so multiple senders stay in sync."""
+        if self.protocol_version < 3:
+            return
+        self.__send(OpCode.PLAYUPDATE, PlayUpdateMessage(
+            playData=summarize_play_message(play_data)
+        ))
 
     def sendOpCode(self,opcode:OpCode):
         self.__send(opcode)
@@ -243,6 +261,13 @@ class FCastSession:
             self.__send(OpCode.PONG)
         elif opcode == OpCode.VERSION:
             self.__handle_version(body)
+        elif opcode == OpCode.INITIAL:
+            sender = message_from_json(InitialSenderMessage, body) if body else None
+            if sender:
+                log(
+                    f"Sender identified as {sender.displayName or '?'} "
+                    f"({sender.appName or '?'} {sender.appVersion or '?'})"
+                )
         else:
             # Everything else is either a receiver-to-sender message we should
             # never receive, or a v3 feature (Initial, playlists, event
@@ -263,3 +288,15 @@ class FCastSession:
             f"Client speaks protocol v{self.peer_version}, "
             f"session negotiated to v{self.protocol_version}"
         )
+
+        # v3 onwards, both parties follow the version exchange with an Initial
+        # message carrying their identity and current state.
+        if self.protocol_version >= 3 and not self.sent_initial:
+            self.sent_initial = True
+            play_data = self.__get_play_data() if self.__get_play_data else None
+            self.__send(OpCode.INITIAL, InitialReceiverMessage(
+                displayName=f"Kodi - {socket.gethostname()}",
+                appName=addonname,
+                appVersion=addonversion,
+                playData=summarize_play_message(play_data),
+            ))

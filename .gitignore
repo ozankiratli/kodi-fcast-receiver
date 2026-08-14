@@ -4,6 +4,9 @@ venv/
 # Target addon
 dist/
 
+# Generated Kodi repository (published by CI, never committed)
+repo/
+
 # Cache
 __pycache__/
 *.pyc

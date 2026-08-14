@@ -4,8 +4,9 @@ import xbmcaddon
 from threading import Timer
 
 # Retrieve Kodi addon information
-addon       = xbmcaddon.Addon()
-addonname   = addon.getAddonInfo('name')
+addon        = xbmcaddon.Addon()
+addonname    = addon.getAddonInfo('name')
+addonversion = addon.getAddonInfo('version')
 
 def notify(msg, icon=xbmcgui.NOTIFICATION_INFO, timeout=3000, sound=False):
     xbmcgui.Dialog().notification(addonname, msg, icon, timeout, sound)

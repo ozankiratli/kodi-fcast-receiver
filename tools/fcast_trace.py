@@ -47,12 +47,18 @@ def stamp():
     return f"{time.time() - started:7.2f}s"
 
 
+FULL_BODIES = False
+
+
 def log(direction, opcode, body=None, note=""):
     name = OPCODES.get(opcode, f"Unknown({opcode})")
     rendered = ""
     if body is not None:
-        text = json.dumps(body)
-        rendered = text if len(text) <= 400 else text[:400] + f"... (+{len(text) - 400} bytes)"
+        if FULL_BODIES:
+            rendered = json.dumps(body, indent=2)
+        else:
+            text = json.dumps(body)
+            rendered = text if len(text) <= 400 else text[:400] + f"... (+{len(text) - 400} bytes, use --full)"
     print(f"{stamp()} {direction} {name:<16} {rendered}{note}", flush=True)
 
 
@@ -65,22 +71,29 @@ class Connection:
         self.playing = False
         self.play_timer = None
 
-    def send(self, opcode, body=None):
+    def send(self, opcode, body=None, quiet=False):
         raw = json.dumps(body).encode("utf-8") if body is not None else b""
         self.sock.sendall(struct.pack("<IB", len(raw) + 1, opcode) + raw)
-        log("SENT <--", opcode, body)
+        if not quiet:
+            log("SENT <--", opcode, body)
 
     def now_ms(self):
         return int(time.time() * 1000)
 
     def playback_update(self, state, position=0.0):
-        self.send(NAME_TO_OPCODE["PlaybackUpdate"], {
+        body = {
             "generationTime": self.now_ms(),
             "state": state,
             "time": position,
             "duration": float(self.args.duration),
             "speed": 1.0,
-        })
+        }
+        # The reference receiver includes this whenever it is playing an item
+        # out of a playlist, and null otherwise.
+        if self.args.item_index is not None:
+            body["itemIndex"] = self.args.item_index
+        self.send(NAME_TO_OPCODE["PlaybackUpdate"], body,
+                  quiet=self.args.quiet_updates and state == PLAYING)
 
     def fake_playback(self, play_body):
         """Pretend to play the item, then emit the requested end signal."""
@@ -188,7 +201,16 @@ def main():
     parser.add_argument("--end-signal", default="idle",
                         choices=["idle", "event", "stop", "all", "none"],
                         help="what to send when the faked item finishes")
+    parser.add_argument("--full", action="store_true",
+                        help="print message bodies in full instead of truncating")
+    parser.add_argument("--item-index", type=int, default=None,
+                        help="include this itemIndex in PlaybackUpdate messages")
+    parser.add_argument("--quiet-updates", action="store_true",
+                        help="do not print the periodic PlaybackUpdate spam")
     args = parser.parse_args()
+
+    global FULL_BODIES
+    FULL_BODIES = args.full
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

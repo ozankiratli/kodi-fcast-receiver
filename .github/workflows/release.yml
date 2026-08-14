@@ -1,0 +1,66 @@
+name: Publish add-on repository
+
+# Tag a release to publish it: bump the version in addon.xml, commit, then
+# `git tag v0.1.2-beta && git push --tags`. Kodi only offers an update when the
+# published version is higher than the installed one, so the bump is what makes
+# devices pick it up.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: make test
+
+      - name: Check the tag matches addon.xml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          addon_version=$(sed -n 's/.*<addon .*version="\([^"]*\)".*/\1/p' addon.xml)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$addon_version" != "$tag_version" ]; then
+            echo "tag $tag_version does not match addon.xml version $addon_version" >&2
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      # base_url is where Pages will actually serve repo/ from, and it has to
+      # be baked into the repository add-on before the zip is built.
+      - name: Build add-on and repository
+        run: make repo REPO_URL=${{ steps.pages.outputs.base_url }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: repo
+
+      - name: Attach the add-on zip to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

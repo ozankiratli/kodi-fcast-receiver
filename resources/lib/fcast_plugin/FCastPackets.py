@@ -68,3 +68,60 @@ class PlaybackErrorMessage:
 class VersionMessage:
     def __init__(self, version: int) -> None:
         self.version = version
+
+# --- Protocol v3 ------------------------------------------------------------
+
+class InitialSenderMessage:
+    def __init__(self,
+        displayName: Optional[str] = None,
+        appName: Optional[str] = None,
+        appVersion: Optional[str] = None
+    ) -> None:
+        self.displayName = displayName
+        self.appName = appName
+        self.appVersion = appVersion
+
+class InitialReceiverMessage:
+    def __init__(self,
+        displayName: Optional[str] = None,
+        appName: Optional[str] = None,
+        appVersion: Optional[str] = None,
+        playData: Optional[PlayMessage] = None
+    ) -> None:
+        self.displayName = displayName
+        self.appName = appName
+        self.appVersion = appVersion
+        self.playData = playData
+
+class PlayUpdateMessage:
+    def __init__(self,
+        playData: Optional[PlayMessage] = None,
+        generationTime: Optional[int] = None
+    ) -> None:
+        self.playData = playData
+        self.generationTime = generationTime if generationTime else int(datetime.now(timezone.utc).timestamp() * 1000)
+
+class SetPlaylistItemMessage:
+    def __init__(self, itemIndex: int) -> None:
+        self.itemIndex = itemIndex
+
+def summarize_play_message(message: Optional[PlayMessage]) -> Optional[PlayMessage]:
+    """Copy a PlayMessage for echoing back to senders, without its content.
+
+    `content` carries an entire inline manifest. Echoing it in Initial or
+    PlayUpdate can push the packet past the protocol's 32KB ceiling, and the
+    sender already knows what it sent us. The URL and container are what the
+    other senders actually need to display what is playing.
+    """
+    if message is None:
+        return None
+
+    return PlayMessage(
+        container=message.container,
+        url=message.url,
+        time=message.time,
+        speed=message.speed,
+        volume=message.volume,
+        headers=message.headers,
+        metadata=message.metadata,
+    )

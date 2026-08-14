@@ -1,8 +1,11 @@
 from enum import Enum
+import inspect
 import json
 import socket
 import struct
 from typing import Any, Callable, Dict, List, Optional
+
+import xbmc
 
 from .FCastPackets import *
 from .util import log
@@ -46,7 +49,31 @@ class Event(str, Enum):
 
 LENGTH_BYTES = 4
 MAXIMUM_PACKET_LENGTH = 32000
+
+# Highest protocol version this receiver implements. Senders that speak a
+# higher version are required by the spec to fall back to this feature set,
+# so everything v3 added (playlists, event subscription, the Initial
+# handshake) is tolerated but not offered.
 FCAST_VERSION = 2
+
+
+def message_from_json(message_class, body: bytes):
+    """Build a message object, dropping fields this receiver does not know.
+
+    Senders on a newer protocol version add fields freely - v3 added `volume`
+    and `metadata` to PlayMessage alone. Passing those straight into the
+    constructor raises TypeError, which used to kill the whole session.
+    """
+    fields = json.loads(body)
+    if not isinstance(fields, dict):
+        raise ValueError(f"expected a JSON object, got {type(fields).__name__}")
+
+    accepted = inspect.signature(message_class).parameters
+    unknown = sorted(set(fields) - set(accepted))
+    if unknown:
+        log(f"Ignoring unknown {message_class.__name__} fields: {', '.join(unknown)}")
+
+    return message_class(**{k: v for k, v in fields.items() if k in accepted})
 
 class FCastSession:
 
@@ -54,11 +81,15 @@ class FCastSession:
     packet_length: int = 0
     client: Optional[socket.socket] = None
     state: SessionState = SessionState.DISCONNECTED
+    # What the sender announced, and what the two of us settled on. Until a
+    # Version message arrives, assume the oldest version that has one.
+    peer_version: int = 1
+    protocol_version: int = 1
 
     __listeners: Dict[str, List[Callable[[Any, Any], Any]]] = {}
 
     def __init__(self, client: socket.socket):
-        self.__listeners = {} 
+        self.__listeners = {}
         self.client = client
         self.state = SessionState.WAITING_FOR_LENGTH
         #send initial version message
@@ -119,7 +150,10 @@ class FCastSession:
             raise Exception("Data received is unhandled in current session state %s" % self.state)
         
     def __handle_length_bytes(self, received_bytes: bytes):
-        bytes_to_read = min(LENGTH_BYTES, len(received_bytes))
+        # Take only what the length field still needs. The buffer may already
+        # hold part of it from a previous chunk, and reading a full four bytes
+        # regardless would swallow packet data that follows it.
+        bytes_to_read = min(LENGTH_BYTES - len(self.buffer), len(received_bytes))
         bytes_remaining = len(received_bytes) - bytes_to_read
 
         self.buffer += received_bytes[:bytes_to_read]
@@ -139,7 +173,9 @@ class FCastSession:
                 self.__handle_packet_bytes(received_bytes[bytes_to_read:])
 
     def __handle_packet_bytes(self, received_bytes: bytes):
-        bytes_to_read = min(self.packet_length, len(received_bytes))
+        # Same as above: only take the bytes this packet is still missing, so
+        # a packet that arrives split across reads does not eat into the next.
+        bytes_to_read = min(self.packet_length - len(self.buffer), len(received_bytes))
         bytes_remaining = len(received_bytes) - bytes_to_read
 
         self.buffer += received_bytes[:bytes_to_read]
@@ -169,11 +205,28 @@ class FCastSession:
 
     def __handle_packet(self):
 
-        opcode = OpCode(struct.unpack("<B", self.buffer[:1])[0])
+        raw_opcode = struct.unpack("<B", self.buffer[:1])[0]
         body = self.buffer[1:] if len(self.buffer) > 1 else None
 
+        try:
+            opcode = OpCode(raw_opcode)
+        except ValueError:
+            # Opcodes are added with every protocol revision. An unrecognised
+            # one means the sender is newer than us, not that the stream is
+            # corrupt, so skip the packet and keep the session up.
+            log(f"Ignoring packet with unknown opcode {raw_opcode}")
+            return
+
+        try:
+            self.__dispatch(opcode, body)
+        except Exception as e:
+            # One bad packet must not tear down a working connection.
+            log(f"Error handling {opcode.name} packet: {e}", xbmc.LOGWARNING)
+
+    def __dispatch(self, opcode: OpCode, body: Optional[bytes]):
+
         if opcode == OpCode.PLAY:
-            self.__emit(Event.PLAY, PlayMessage(**json.loads(body)) if body else None)
+            self.__emit(Event.PLAY, message_from_json(PlayMessage, body) if body else None)
         elif opcode == OpCode.PAUSE:
             self.__emit(Event.PAUSE)
         elif opcode == OpCode.RESUME:
@@ -181,17 +234,32 @@ class FCastSession:
         elif opcode == OpCode.STOP:
             self.__emit(Event.STOP)
         elif opcode == OpCode.SEEK:
-            self.__emit(Event.SEEK, SeekMessage(**json.loads(body)) if body else None)
+            self.__emit(Event.SEEK, message_from_json(SeekMessage, body) if body else None)
         elif opcode == OpCode.SET_VOLUME:
-            self.__emit(Event.SET_VOLUME, SetVolumeMessage(**json.loads(body)) if body else None)
+            self.__emit(Event.SET_VOLUME, message_from_json(SetVolumeMessage, body) if body else None)
         elif opcode == OpCode.SET_SPEED:
-            self.__emit(Event.SET_SPEED, SetSpeedMessage(**json.loads(body)) if body else None)
+            self.__emit(Event.SET_SPEED, message_from_json(SetSpeedMessage, body) if body else None)
         elif opcode == OpCode.PING:
             self.__send(OpCode.PONG)
         elif opcode == OpCode.VERSION:
-            client_version = VersionMessage(**json.loads(body)) if body else None
-            if client_version:
-                log(f"Client reported version: {client_version.version}, sending back our version {FCAST_VERSION}")
-                self.__send(OpCode.VERSION, VersionMessage(version=FCAST_VERSION))
+            self.__handle_version(body)
         else:
-            raise Exception("Unhandled opcode %s" % opcode)
+            # Everything else is either a receiver-to-sender message we should
+            # never receive, or a v3 feature (Initial, playlists, event
+            # subscription) we do not implement. Both are safe to drop.
+            log(f"Ignoring {opcode.name} packet, unsupported at protocol v{FCAST_VERSION}")
+
+    def __handle_version(self, body: Optional[bytes]):
+        if not body:
+            return
+
+        message = message_from_json(VersionMessage, body)
+        self.peer_version = int(message.version)
+        self.protocol_version = min(self.peer_version, FCAST_VERSION)
+        # No reply here: both parties announce once on connect, which we
+        # already did from __init__. Echoing a second Version message confuses
+        # senders that treat it as a renegotiation.
+        log(
+            f"Client speaks protocol v{self.peer_version}, "
+            f"session negotiated to v{self.protocol_version}"
+        )

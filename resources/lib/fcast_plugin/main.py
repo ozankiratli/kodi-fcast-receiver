@@ -200,7 +200,7 @@ def on_image_closed() -> None:
     log("Image viewer closed")
     broadcast_playback_state(PlayBackState.IDLE)
 
-def handle_image(message: PlayMessage, headers: str) -> None:
+def handle_image(message: PlayMessage, headers: str = "") -> None:
     """Put a still picture on screen and report it as playing.
 
     There is no player to ask about state afterwards, so the Playing update
@@ -208,17 +208,12 @@ def handle_image(message: PlayMessage, headers: str) -> None:
     """
     global current_play_message
 
-    url = message.url
-    if headers:
-        # Same convention Kodi uses for media URLs.
-        url = f'{url}|{headers}'
-
     if player and player.isPlaying():
         xbmc.executebuiltin('PlayerControl(Stop)')
 
     current_play_message = message
     notify('Showing image ...')
-    image_viewer.show(url)
+    image_viewer.show(message.url, message.headers)
     broadcast_playback_state(PlayBackState.PLAYING)
     broadcast_play_update()
 
@@ -276,6 +271,9 @@ def handle_play(session: FCastSession, message = None):
 
     if player and play_item:
         global current_play_message
+        # The picture viewer sits above the video window, so a picture left on
+        # screen hides the video entirely rather than being replaced by it.
+        image_viewer.close()
         notify('Starting player ...')
         play_item.setPath(url)
         start_time = float(message.time) if message.time else 0.0

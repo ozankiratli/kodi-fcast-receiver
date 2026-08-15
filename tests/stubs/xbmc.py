@@ -13,8 +13,34 @@ def executebuiltin(command, wait=False):
 def sleep(millis):
     pass
 
+# Tests set jsonrpc_responses[method] to the result Kodi should return, and
+# read back jsonrpc_calls to assert on what was asked for.
+jsonrpc_calls = []
+jsonrpc_responses = {}
+
+
+def reset_jsonrpc():
+    jsonrpc_calls.clear()
+    jsonrpc_responses.clear()
+
+
 def executeJSONRPC(request):
-    return '{"jsonrpc":"2.0","id":1,"result":[]}'
+    import json as _json
+
+    parsed = _json.loads(request)
+    jsonrpc_calls.append(parsed)
+
+    method = parsed.get("method")
+    if method not in jsonrpc_responses:
+        return _json.dumps({"jsonrpc": "2.0", "id": parsed.get("id"), "result": []})
+
+    result = jsonrpc_responses[method]
+    if isinstance(result, Exception):
+        return _json.dumps({
+            "jsonrpc": "2.0", "id": parsed.get("id"),
+            "error": {"code": -32601, "message": str(result)},
+        })
+    return _json.dumps({"jsonrpc": "2.0", "id": parsed.get("id"), "result": result})
 
 class Monitor:
     def abortRequested(self):

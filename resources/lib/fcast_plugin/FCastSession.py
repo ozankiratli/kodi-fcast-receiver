@@ -50,11 +50,15 @@ class Event(str, Enum):
 LENGTH_BYTES = 4
 MAXIMUM_PACKET_LENGTH = 32000
 
-# Highest protocol version this receiver implements. Senders that speak a
-# higher version are required by the spec to fall back to this feature set,
-# so everything v3 added (playlists, event subscription, the Initial
-# handshake) is tolerated but not offered.
-FCAST_VERSION = 2
+# Highest protocol version this receiver implements. v3 is required rather
+# than optional: senders drive their own queue from the MediaItemEnd event,
+# and events only exist from v3, so a v2 receiver can never tell a sender that
+# an item finished in a way it will act on.
+#
+# Not yet implemented from v3: playlist content (`application/json` carrying
+# PlaylistContent) and key events. A sender that casts a playlist gets an
+# "unhandled container" notification rather than playback.
+FCAST_VERSION = 3
 
 
 def message_from_json(message_class, body: bytes):
@@ -88,6 +92,8 @@ class FCastSession:
 
     # Whether the v3 Initial handshake has been completed for this session.
     sent_initial: bool = False
+    # EventType values this sender asked to be told about.
+    subscribed_events: set
 
     __listeners: Dict[str, List[Callable[[Any, Any], Any]]] = {}
 
@@ -96,6 +102,7 @@ class FCastSession:
         self.client = client
         self.state = SessionState.WAITING_FOR_LENGTH
         self.sent_initial = False
+        self.subscribed_events = set()
         # Lets a newly connected sender learn what is already playing, without
         # this module needing to know how playback state is tracked.
         self.__get_play_data = get_play_data
@@ -117,6 +124,22 @@ class FCastSession:
 
     def send_playback_error(self, value: PlaybackErrorMessage):
         self.__send(OpCode.PLAYBACK_ERROR, value)
+
+    def is_subscribed_to(self, event_type: int) -> bool:
+        return event_type in self.subscribed_events
+
+    def send_media_event(self, event_type: int, item: Optional[MediaItem]) -> bool:
+        """Fire a media event at this sender. Returns True if it was sent.
+
+        Only subscribers get events, per the protocol. Senders act on these:
+        Grayjay advances its own queue when it receives MediaItemEnd, which is
+        how the next video starts playing.
+        """
+        if self.protocol_version < 3 or not self.is_subscribed_to(event_type):
+            return False
+
+        self.__send(OpCode.EVENT, EventMessage(MediaItemEvent(event_type, item)))
+        return True
 
     def send_play_update(self, play_data: Optional[PlayMessage]):
         """Tell this sender what is now playing, so multiple senders stay in sync."""
@@ -268,11 +291,35 @@ class FCastSession:
                     f"Sender identified as {sender.displayName or '?'} "
                     f"({sender.appName or '?'} {sender.appVersion or '?'})"
                 )
+        elif opcode == OpCode.SUBSCRIBEEVENT:
+            self.__update_subscription(body, subscribe=True)
+        elif opcode == OpCode.UNSUBSCRIBEEVENT:
+            self.__update_subscription(body, subscribe=False)
         else:
             # Everything else is either a receiver-to-sender message we should
             # never receive, or a v3 feature (Initial, playlists, event
             # subscription) we do not implement. Both are safe to drop.
             log(f"Ignoring {opcode.name} packet, unsupported at protocol v{FCAST_VERSION}")
+
+    def __update_subscription(self, body: Optional[bytes], subscribe: bool):
+        if not body:
+            return
+
+        message = message_from_json(SubscribeEventMessage, body)
+        event_type = (message.event or {}).get("type")
+        if event_type is None:
+            return
+
+        if subscribe:
+            self.subscribed_events.add(event_type)
+        else:
+            self.subscribed_events.discard(event_type)
+
+        try:
+            name = EventType(event_type).name
+        except ValueError:
+            name = f"type {event_type}"
+        log(f"Sender {'subscribed to' if subscribe else 'unsubscribed from'} {name}")
 
     def __handle_version(self, body: Optional[bytes]):
         if not body:

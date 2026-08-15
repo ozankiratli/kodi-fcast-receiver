@@ -17,7 +17,7 @@ def getCurrentWindowDialogId():
 
 class Dialog:
     def notification(self, heading, message, icon=NOTIFICATION_INFO, time=5000, sound=True):
-        notifications.append((heading, message))
+        notifications.append((heading, message, icon))
 
 class ListItem:
     def __init__(self, label="", label2="", path="", offscreen=False):

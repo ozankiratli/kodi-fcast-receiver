@@ -1,18 +1,21 @@
-"""Still pictures: classification, pre-fetching, and the viewer's lifecycle."""
+"""Still pictures: classification, the viewer's lifecycle, and how long one stays up."""
 
 import http.server
 import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 
 from context import fcast_plugin  # noqa: F401  (sets up sys.path)
-from fcast_plugin import main
+from fcast_plugin import main, settings
 from fcast_plugin.image_viewer import ImageViewer, WINDOW_SLIDESHOW
-from fcast_plugin.FCastPackets import PlayBackState, PlayMessage
+from fcast_plugin.FCastPackets import EventType, PlayBackState, PlayMessage
+from test_playlist import playlist_message, video
 
 import xbmc
+import xbmcaddon
 import xbmcgui
 
 PNG = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
@@ -44,24 +47,59 @@ class FakePlayer:
     """Enough of FCastPlayer for handle_play to reach its video branch."""
 
     start_time = 0.0
+    owns_playback = False
+
+    def __init__(self):
+        self.played = []
+        self.paused = []
 
     def isPlaying(self):
         return False
 
-    def play(self, *args, **kwargs):
-        pass
+    def play(self, item=None, listitem=None):
+        self.played.append(item)
+
+    def doPause(self):
+        self.paused.append(True)
+
+    def doResume(self):
+        self.paused.append(False)
+
+
+def wait_for(predicate, timeout=5.0):
+    """Give a thread the play message started a moment to get there."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 class FakeSession:
     def __init__(self):
         self.playback_updates = []
         self.play_updates = []
+        self.media_events = []
 
     def send_playback_update(self, message):
         self.playback_updates.append(message)
 
     def send_play_update(self, play_data):
         self.play_updates.append(play_data)
+
+    def send_media_event(self, event_type, item):
+        self.media_events.append((event_type, item))
+        return True
+
+    def states(self):
+        return [update.state for update in self.playback_updates]
+
+
+def image(name, **extra):
+    item = {"container": "image/jpeg", "url": "https://e/%s.jpg" % name}
+    item.update(extra)
+    return item
 
 
 class TestClassification(unittest.TestCase):
@@ -109,14 +147,16 @@ class ViewerTestCase(unittest.TestCase):
         xbmcgui.current_dialog_id = 9999
         ImageServer.received_headers = {}
         self.closed = []
+        self.expired = []
         self.cache = tempfile.mkdtemp()
-        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True))
+        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True),
+                                  on_expired=lambda: self.expired.append(True))
 
     def tearDown(self):
         shutil.rmtree(self.cache, ignore_errors=True)
 
-    def show_now(self, url, headers=None):
-        self.viewer.show(url)
+    def show_now(self, url, headers=None, duration=0.0):
+        self.viewer.show(url, duration=duration)
 
     def shown(self):
         return [c for c in xbmc.builtins_called if c.startswith("ShowPicture(")]
@@ -256,6 +296,122 @@ class TestViewerLifecycle(ViewerTestCase):
         self.assertEqual(self.closed, [])
 
 
+class TestCountdown(ViewerTestCase):
+    """How long a picture stays up, at the viewer's own level."""
+
+    def test_a_picture_with_no_duration_never_expires(self):
+        self.show_now(self.origin + "/p.png")
+        self.on_screen()
+
+        for _ in range(5):
+            self.viewer.poll()
+
+        self.assertEqual(self.viewer.seconds_left, 0.0)
+        self.assertEqual(self.expired, [])
+        self.assertTrue(self.viewer.is_showing)
+
+    def test_the_countdown_starts_when_the_picture_is_up_not_when_asked_for(self):
+        # ShowPicture returns long before Kodi has fetched anything, so
+        # counting from there would cut a slow picture short.
+        self.show_now(self.origin + "/p.png", duration=30)
+        self.assertEqual(self.viewer.seconds_left, 0.0)
+
+        self.on_screen()
+        self.viewer.poll()
+
+        self.assertAlmostEqual(self.viewer.seconds_left, 30, delta=0.5)
+
+    def test_time_running_out_hands_over_once(self):
+        self.show_now(self.origin + "/p.png", duration=0.05)
+        self.on_screen()
+        self.viewer.poll()
+
+        time.sleep(0.06)
+        self.viewer.poll()
+        self.viewer.poll()
+
+        self.assertEqual(self.expired, [True])
+        # Still showing: it is the callback's business what comes next.
+        self.assertTrue(self.viewer.is_showing)
+
+    def test_a_picture_swapped_in_place_gets_its_own_time(self):
+        # The window is already up, so there is no opening to wait for.
+        self.show_now(self.origin + "/one.png", duration=10)
+        self.on_screen()
+        self.viewer.poll()
+
+        self.show_now(self.origin + "/two.png", duration=30)
+
+        self.assertAlmostEqual(self.viewer.seconds_left, 30, delta=0.5)
+
+    def test_closing_forgets_the_countdown(self):
+        self.show_now(self.origin + "/p.png", duration=30)
+        self.on_screen()
+        self.viewer.poll()
+
+        self.viewer.close()
+
+        self.assertEqual(self.viewer.seconds_left, 0.0)
+
+    def test_pause_holds_the_countdown_where_it_is(self):
+        self.show_now(self.origin + "/p.png", duration=0.05)
+        self.on_screen()
+        self.viewer.poll()
+
+        self.assertTrue(self.viewer.pause())
+        time.sleep(0.06)
+        self.viewer.poll()
+
+        self.assertEqual(self.expired, [])
+        self.assertGreater(self.viewer.seconds_left, 0.0)
+
+    def test_resume_carries_on_from_where_it_paused(self):
+        self.show_now(self.origin + "/p.png", duration=30)
+        self.on_screen()
+        self.viewer.poll()
+        self.viewer.pause()
+        left = self.viewer.seconds_left
+
+        self.viewer.resume()
+
+        self.assertAlmostEqual(self.viewer.seconds_left, left, delta=0.5)
+
+    def test_resuming_a_picture_with_no_duration_does_not_start_a_clock(self):
+        self.show_now(self.origin + "/p.png")
+        self.on_screen()
+        self.viewer.poll()
+        self.viewer.pause()
+
+        self.viewer.resume()
+
+        self.assertEqual(self.viewer.seconds_left, 0.0)
+
+    def test_pausing_before_the_picture_appears_holds_the_whole_duration(self):
+        # A sender can pause inside the moment between ShowPicture and Kodi
+        # having the picture up, before the countdown has begun at all.
+        self.show_now(self.origin + "/p.png", duration=30)
+        self.viewer.pause()
+
+        self.on_screen()
+        self.viewer.poll()
+        self.assertEqual(self.viewer.seconds_left, 30)
+
+        self.viewer.resume()
+
+        self.assertAlmostEqual(self.viewer.seconds_left, 30, delta=0.5)
+        self.assertEqual(self.expired, [])
+
+    def test_pause_and_resume_say_whether_there_was_a_picture(self):
+        # False is what tells main to give the request to the player instead.
+        self.assertFalse(self.viewer.pause())
+        self.assertFalse(self.viewer.resume())
+
+        self.show_now(self.origin + "/p.png")
+
+        self.assertTrue(self.viewer.pause())
+        self.assertTrue(self.viewer.resume())
+
+
 class TestPlaybackReporting(unittest.TestCase):
     def setUp(self):
         xbmc.builtins_called.clear()
@@ -315,6 +471,162 @@ class TestPlaybackReporting(unittest.TestCase):
 
         self.assertIn("Action(Stop)", xbmc.builtins_called)
         self.assertFalse(main.image_viewer.is_showing)
+
+
+class TestPictureDuration(unittest.TestCase):
+    """showDuration: only playlists, and only as long as the user allows."""
+
+    def setUp(self):
+        xbmc.builtins_called.clear()
+        xbmcaddon.reset_settings()
+        xbmcgui.current_window_id = 10000
+        xbmcgui.current_dialog_id = 9999
+        main.sessions.clear()
+        self.session = FakeSession()
+        main.sessions.append(self.session)
+        self.previous_player, main.player = main.player, FakePlayer()
+        main.playlist = None
+
+    def tearDown(self):
+        main.sessions.clear()
+        main.image_viewer.close()
+        main.player = self.previous_player
+        main.playlist = None
+        xbmcaddon.reset_settings()
+
+    def on_screen(self):
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
+
+    def play(self, message):
+        main.handle_play(None, message)
+
+    def start(self, *items):
+        """Cast a playlist and let the first picture reach the screen."""
+        self.play(playlist_message(list(items)))
+        self.on_screen()
+        main.image_viewer.poll()
+
+    def test_a_picture_cast_on_its_own_is_never_timed_out(self):
+        # Ozan's constraint, and what FCast's own receiver does: it starts the
+        # showDuration timer only for items that came from a playlist.
+        xbmcaddon.settings[settings.PLAYLIST_IMAGE_DURATION] = 5
+
+        self.play(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        self.on_screen()
+        main.image_viewer.poll()
+
+        self.assertEqual(main.image_viewer.seconds_left, 0.0)
+
+    def test_a_playlist_picture_gets_the_duration_the_sender_asked_for(self):
+        self.start(image("a", showDuration=45), image("b"))
+
+        self.assertAlmostEqual(main.image_viewer.seconds_left, 45, delta=0.5)
+
+    def test_a_playlist_picture_with_no_duration_gets_the_users(self):
+        # Otherwise it holds up the rest of the queue for good: nothing ever
+        # reports that a picture finished.
+        xbmcaddon.settings[settings.PLAYLIST_IMAGE_DURATION] = 20
+
+        self.start(image("a"), image("b"))
+
+        self.assertAlmostEqual(main.image_viewer.seconds_left, 20, delta=0.5)
+
+    def test_the_user_can_override_the_senders_duration(self):
+        xbmcaddon.settings.update({
+            settings.PLAYLIST_IMAGE_DURATION: 20,
+            settings.PLAYLIST_IMAGE_DURATION_OVERRIDE: True,
+        })
+
+        self.start(image("a", showDuration=45), image("b"))
+
+        self.assertAlmostEqual(main.image_viewer.seconds_left, 20, delta=0.5)
+
+    def test_a_duration_of_zero_leaves_the_picture_up(self):
+        # The way out for anyone who wants to move through a slideshow by hand.
+        xbmcaddon.settings[settings.PLAYLIST_IMAGE_DURATION] = 0
+
+        self.start(image("a"), image("b"))
+
+        self.assertEqual(main.image_viewer.seconds_left, 0.0)
+
+    def test_the_senders_duration_still_applies_when_the_users_is_zero(self):
+        xbmcaddon.settings[settings.PLAYLIST_IMAGE_DURATION] = 0
+
+        self.start(image("a", showDuration=45), image("b"))
+
+        self.assertAlmostEqual(main.image_viewer.seconds_left, 45, delta=0.5)
+
+    def test_time_running_out_moves_the_queue_on(self):
+        self.start(image("a", showDuration=0.05), image("b", showDuration=60))
+        xbmc.builtins_called.clear()
+
+        time.sleep(0.06)
+        main.image_viewer.poll()
+
+        self.assertEqual(main.playlist.index, 1)
+        self.assertIn("ShowPicture(https://e/b.jpg)", xbmc.builtins_called)
+        self.assertTrue(main.image_viewer.is_showing)
+
+    def test_moving_on_reports_the_picture_that_finished(self):
+        # A MediaItemEnd with a null item tells a sender nothing: it matches
+        # the item against its own queue entry to know what ended.
+        self.start(image("a", showDuration=0.05), image("b", showDuration=60))
+
+        time.sleep(0.06)
+        main.image_viewer.poll()
+
+        self.assertEqual(len(self.session.media_events), 1)
+        event_type, item = self.session.media_events[0]
+        self.assertEqual(event_type, EventType.MEDIA_ITEM_END)
+        self.assertIsNotNone(item)
+        self.assertEqual(item.url, "https://e/a.jpg")
+
+    def test_the_last_picture_closes_the_viewer_and_reports_idle(self):
+        self.start(image("only", showDuration=0.05))
+        self.session.playback_updates.clear()
+        xbmc.builtins_called.clear()
+
+        time.sleep(0.06)
+        main.image_viewer.poll()
+
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
+        self.assertFalse(main.image_viewer.is_showing)
+        self.assertEqual(self.session.states()[-1], PlayBackState.IDLE)
+        self.assertIsNone(main.playlist)
+
+    def test_a_video_after_a_picture_is_played_not_shown(self):
+        self.start(image("a", showDuration=0.05), video("b"))
+        xbmc.builtins_called.clear()
+
+        time.sleep(0.06)
+        main.image_viewer.poll()
+
+        self.assertEqual(main.playlist.index, 1)
+        # The picture viewer sits above the video window, so it has to go.
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
+        self.assertTrue(wait_for(lambda: main.player.played == ["https://e/b.mp4"]))
+
+    def test_pausing_a_picture_holds_it_and_says_so(self):
+        self.start(image("a", showDuration=60), image("b"))
+        self.session.playback_updates.clear()
+
+        main.handle_pause(None)
+
+        self.assertEqual(self.session.states(), [PlayBackState.PAUSED])
+        self.assertGreater(main.image_viewer.seconds_left, 0.0)
+
+        main.handle_resume(None)
+
+        self.assertEqual(self.session.states()[-1], PlayBackState.PLAYING)
+
+    def test_pausing_a_picture_leaves_the_player_alone(self):
+        # While a picture is up, whatever Kodi is playing is not ours.
+        self.start(image("a", showDuration=60))
+        main.player.paused = []
+
+        main.handle_pause(None)
+
+        self.assertEqual(main.player.paused, [])
 
 
 if __name__ == "__main__":

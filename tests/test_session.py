@@ -18,12 +18,23 @@ from fcast_plugin.FCastSession import (
     SessionState,
     message_from_json,
 )
-from fcast_plugin.FCastPackets import PlayMessage
+from fcast_plugin.FCastPackets import EventType, MediaItem, PlayMessage
 
 
 def packet(opcode, body=None):
     raw = json.dumps(body).encode("utf-8") if body is not None else b""
     return struct.pack("<IB", len(raw) + 1, opcode) + raw
+
+
+def decode_packets(data):
+    """Split a byte stream into [(opcode, parsed body or None), ...]."""
+    packets, pos = [], 0
+    while pos < len(data):
+        size, opcode = struct.unpack("<IB", data[pos:pos + 5])
+        body = data[pos + 5:pos + 4 + size]
+        packets.append((opcode, json.loads(body) if body else None))
+        pos += 4 + size
+    return packets
 
 
 class SessionHarness:
@@ -167,10 +178,13 @@ class TestVersionNegotiation(unittest.TestCase):
             self.assertEqual(len(sent), 4 + size)
 
     def test_no_echo_when_sender_announces(self):
+        # Initial legitimately follows for a v3 peer; a second Version does not.
         with SessionHarness() as harness:
             harness.sent()
             harness.feed(packet(OpCode.VERSION, {"version": 3}))
-            self.assertEqual(harness.sent(), b"")
+
+            replies = [opcode for opcode, _ in decode_packets(harness.sent())]
+            self.assertNotIn(OpCode.VERSION, replies)
 
     def test_session_downgrades_to_our_version(self):
         with SessionHarness() as harness:
@@ -184,17 +198,6 @@ class TestVersionNegotiation(unittest.TestCase):
             self.assertEqual(harness.session.protocol_version, 1)
 
 
-def decode_packets(data):
-    """Split a byte stream into [(opcode, parsed body or None), ...]."""
-    packets, pos = [], 0
-    while pos < len(data):
-        size, opcode = struct.unpack("<IB", data[pos:pos + 5])
-        body = data[pos + 5:pos + 4 + size]
-        packets.append((opcode, json.loads(body) if body else None))
-        pos += 4 + size
-    return packets
-
-
 class TestInitialHandshake(unittest.TestCase):
     """v3 requires an Initial exchange once both sides know the version.
 
@@ -202,10 +205,10 @@ class TestInitialHandshake(unittest.TestCase):
     still announces v2 and switches on by itself when FCAST_VERSION is raised.
     """
 
-    def test_no_initial_while_we_announce_v2(self):
+    def test_no_initial_to_a_v2_sender(self):
         with SessionHarness() as harness:
             harness.sent()
-            harness.feed(packet(OpCode.VERSION, {"version": 3}))
+            harness.feed(packet(OpCode.VERSION, {"version": 2}))
             self.assertEqual(harness.sent(), b"")
 
     def test_initial_sent_once_both_sides_are_v3(self):
@@ -280,6 +283,80 @@ class TestPlayUpdate(unittest.TestCase):
                 self.assertEqual(opcode, OpCode.PLAYUPDATE)
                 self.assertEqual(body["playData"]["url"], "https://e/v.mp4")
                 self.assertIsInstance(body["generationTime"], int)
+
+
+class TestEventSubscription(unittest.TestCase):
+    """Events only go to senders that asked for them.
+
+    Grayjay subscribes to MediaItemEnd on connect and answers the event with
+    the Play message for the next video, which is how its queue advances.
+    """
+
+    def subscribe(self, harness, event_type):
+        harness.feed(packet(OpCode.VERSION, {"version": 3}))
+        harness.feed(packet(OpCode.SUBSCRIBEEVENT, {"event": {"type": event_type}}))
+        harness.sent()
+
+    def test_event_is_sent_to_a_subscriber(self):
+        with SessionHarness() as harness:
+            self.subscribe(harness, EventType.MEDIA_ITEM_END)
+
+            item = MediaItem(container="video/mp4", url="https://e/v.mp4")
+            self.assertTrue(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_END, item))
+
+            opcode, body = decode_packets(harness.sent())[0]
+            self.assertEqual(opcode, OpCode.EVENT)
+            self.assertEqual(body["event"]["type"], EventType.MEDIA_ITEM_END)
+            self.assertEqual(body["event"]["item"]["url"], "https://e/v.mp4")
+            self.assertIsInstance(body["generationTime"], int)
+
+    def test_no_event_without_a_subscription(self):
+        with SessionHarness() as harness:
+            harness.feed(packet(OpCode.VERSION, {"version": 3}))
+            harness.sent()
+
+            self.assertFalse(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_END, None))
+            self.assertEqual(harness.sent(), b"")
+
+    def test_subscription_is_per_event_type(self):
+        with SessionHarness() as harness:
+            self.subscribe(harness, EventType.MEDIA_ITEM_END)
+
+            self.assertFalse(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_START, None))
+            self.assertTrue(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_END, None))
+
+    def test_unsubscribe_stops_the_events(self):
+        with SessionHarness() as harness:
+            self.subscribe(harness, EventType.MEDIA_ITEM_END)
+            harness.feed(packet(OpCode.UNSUBSCRIBEEVENT,
+                                {"event": {"type": EventType.MEDIA_ITEM_END}}))
+
+            self.assertFalse(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_END, None))
+
+    def test_no_event_to_a_v2_sender_even_if_it_subscribed(self):
+        with SessionHarness() as harness:
+            harness.feed(packet(OpCode.VERSION, {"version": 2}))
+            harness.feed(packet(OpCode.SUBSCRIBEEVENT,
+                                {"event": {"type": EventType.MEDIA_ITEM_END}}))
+            harness.sent()
+
+            self.assertFalse(
+                harness.session.send_media_event(EventType.MEDIA_ITEM_END, None))
+            self.assertEqual(harness.sent(), b"")
+
+    def test_malformed_subscription_is_ignored(self):
+        with SessionHarness() as harness:
+            harness.feed(packet(OpCode.VERSION, {"version": 3}))
+            harness.feed(packet(OpCode.SUBSCRIBEEVENT, {"event": {}}))
+            harness.feed(packet(OpCode.SUBSCRIBEEVENT, {}))
+
+            self.assertNotEqual(harness.session.state, SessionState.DISCONNECTED)
+            self.assertEqual(harness.session.subscribed_events, set())
 
 
 class TestMessageFromJson(unittest.TestCase):

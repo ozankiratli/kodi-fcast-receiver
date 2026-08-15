@@ -13,6 +13,7 @@ from .FCastSession import Event, FCastSession, FCAST_VERSION
 from .FCastPackets import *
 from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
+from .image_viewer import ImageViewer
 from .util import log, notify, debounce
 from .mdns import register as mdns_register, unregister as mdns_unregister
 
@@ -45,6 +46,10 @@ current_play_message: Optional[PlayMessage] = None
 
 # Last volume published to senders, so the poll only speaks up on a change.
 last_volume: Optional[float] = None
+
+# Pictures bypass the player entirely, so they get their own viewer. The
+# lambda defers resolving the callback, which is defined further down.
+image_viewer = ImageViewer(on_closed=lambda: on_image_closed())
 
 def get_current_play_data() -> Optional[PlayMessage]:
     """What is playing right now, or None if nothing is.
@@ -86,6 +91,8 @@ def check_player():
         # Volume needs polling too, but once a second is plenty - the
         # position above is what needs the 20Hz.
         ticks += 1
+        if ticks % 4 == 0:
+            image_viewer.poll()
         if ticks >= 20:
             ticks = 0
             check_volume()
@@ -108,8 +115,36 @@ DASH_CONTAINERS = frozenset([
     'application/xml+dash',
 ])
 
+# Still pictures, which take a different path entirely - see image_viewer.
+# Mirrors the formats the reference receiver accepts.
+IMAGE_CONTAINERS = frozenset([
+    'image/apng',
+    'image/avif',
+    'image/bmp',
+    'image/gif',
+    'image/x-icon',
+    'image/jpeg',
+    'image/png',
+    'image/svg+xml',
+    'image/vnd.microsoft.icon',
+    'image/webp',
+])
+IMAGE_EXTENSIONS = frozenset([
+    '.apng', '.avif', '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.jpe',
+    '.jif', '.jfif', '.png', '.svg', '.webp',
+])
+
 # What inputstream.adaptive itself expects to see.
 ISA_MIME_TYPES = {'hls': 'application/x-mpegURL', 'mpd': 'application/dash+xml'}
+
+def is_image(container: Optional[str], url: str = "") -> bool:
+    """Whether this play request is a still picture rather than a stream."""
+    normalized = (container or '').split(';')[0].strip().lower()
+    if normalized in IMAGE_CONTAINERS:
+        return True
+    if normalized:
+        return False
+    return Path(urlparse(url).path).suffix.lower() in IMAGE_EXTENSIONS
 
 def stream_type(container: Optional[str], url: str = "") -> Optional[str]:
     """Classify a play request as 'hls', 'mpd', or None for direct playback.
@@ -155,6 +190,38 @@ def apply_inputstream(play_item: xbmcgui.ListItem, kind: str, headers: str) -> N
         play_item.setProperty('inputstream.adaptive.manifest_headers', headers)
         play_item.setProperty('inputstream.adaptive.stream_headers', headers)
 
+def broadcast_playback_state(state: PlayBackState, position: float = 0.0) -> None:
+    message = PlayBackUpdateMessage(int(position), state, speed=1.0)
+    for session in list(sessions):
+        session.send_playback_update(message)
+
+def on_image_closed() -> None:
+    """The picture viewer went away, so senders should stop showing it."""
+    log("Image viewer closed")
+    broadcast_playback_state(PlayBackState.IDLE)
+
+def handle_image(message: PlayMessage, headers: str) -> None:
+    """Put a still picture on screen and report it as playing.
+
+    There is no player to ask about state afterwards, so the Playing update
+    goes out here and the matching Idle comes from on_image_closed.
+    """
+    global current_play_message
+
+    url = message.url
+    if headers:
+        # Same convention Kodi uses for media URLs.
+        url = f'{url}|{headers}'
+
+    if player and player.isPlaying():
+        xbmc.executebuiltin('PlayerControl(Stop)')
+
+    current_play_message = message
+    notify('Showing image ...')
+    image_viewer.show(url)
+    broadcast_playback_state(PlayBackState.PLAYING)
+    broadcast_play_update()
+
 def handle_play(session: FCastSession, message = None):
     log(f"Client request play")
     play_item: Optional[xbmcgui.ListItem] = None
@@ -164,6 +231,12 @@ def handle_play(session: FCastSession, message = None):
         return
 
     headers = encode_headers(message.headers)
+
+    # Pictures are not streams and must not reach the video player, which
+    # renders them for a few milliseconds and then closes.
+    if message.url and is_image(message.container, message.url):
+        handle_image(message, headers)
+        return
 
     if message.url:
         url = message.url
@@ -181,12 +254,6 @@ def handle_play(session: FCastSession, message = None):
                 # appended to the URL itself.
                 url = f'{url}|{headers}'
             if message.container:
-                # TODO: Image containers (e.g. image/jpeg, image/png) are not handled separately.
-                # CastLab sends photos with an image MIME type and they fall through here,
-                # causing Kodi to treat them as video. The result is the image displays for
-                # only ~4ms before the player closes. Needs a dedicated image display path
-                # (e.g. xbmc.executebuiltin("ShowPicture(...)") or a slideshow ListItem).
-                # This needs investigation as it might be an error on CastLab app.
                 play_item.setContentLookup(False)
                 play_item.setMimeType(message.container)
             else:
@@ -260,6 +327,10 @@ def handle_seek(session: FCastSession, message = None):
 def handle_stop(session: FCastSession, message = None):
     global player
     log(f"Client request stop")
+    if image_viewer.is_showing:
+        image_viewer.close()
+        broadcast_playback_state(PlayBackState.IDLE)
+        return
     if player:
         def do_stop():
             xbmc.executebuiltin('PlayerControl(Stop)')

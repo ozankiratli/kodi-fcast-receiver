@@ -109,16 +109,13 @@ class ViewerTestCase(unittest.TestCase):
         ImageServer.received_headers = {}
         self.closed = []
         self.cache = tempfile.mkdtemp()
-        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True),
-                                  cache_dir=self.cache)
+        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True))
 
     def tearDown(self):
         shutil.rmtree(self.cache, ignore_errors=True)
 
     def show_now(self, url, headers=None):
-        """show() pre-fetches on a worker thread; wait for it to land."""
-        self.viewer.show(url, headers)
-        self.viewer._worker.join(timeout=10)
+        self.viewer.show(url)
 
     def shown(self):
         return [c for c in xbmc.builtins_called if c.startswith("ShowPicture(")]
@@ -131,66 +128,6 @@ class ViewerTestCase(unittest.TestCase):
 
     def off_screen(self):
         xbmcgui.current_window_id = 10000
-
-
-class TestPreFetching(ViewerTestCase):
-    """Pictures are fetched locally before Kodi is asked to show them.
-
-    Kodi blanks the viewer while it loads, so pointing it at a remote URL
-    means the screen is dark for the whole download. Fetching here keeps
-    whatever is on screen up until the replacement is ready.
-    """
-
-    def test_kodi_is_given_a_local_file_not_the_remote_url(self):
-        self.show_now(self.origin + "/photo.png")
-
-        self.assertEqual(len(self.shown()), 1)
-        self.assertIn(self.cache, self.shown()[0])
-        self.assertNotIn(self.origin, self.shown()[0])
-        self.assertEqual(len(self.cached_files()), 1)
-
-    def test_the_fetched_file_is_the_picture(self):
-        self.show_now(self.origin + "/photo.png")
-
-        path = os.path.join(self.cache, self.cached_files()[0])
-        with open(path, "rb") as handle:
-            self.assertEqual(handle.read(), PNG)
-
-    def test_headers_are_sent_on_the_request(self):
-        self.show_now(self.origin + "/photo.png",
-                      {"Referer": "https://example/", "User-Agent": "CastLab"})
-
-        self.assertEqual(ImageServer.received_headers.get("Referer"), "https://example/")
-        self.assertEqual(ImageServer.received_headers.get("User-Agent"), "CastLab")
-
-    def test_extension_comes_from_the_content_type(self):
-        self.show_now(self.origin + "/photo-without-extension")
-
-        # Kodi picks its decoder from the extension.
-        self.assertTrue(self.cached_files()[0].endswith(".png"))
-
-    def test_a_failed_fetch_falls_back_to_letting_kodi_load_the_url(self):
-        url = self.origin + "/missing.png"
-
-        self.show_now(url)
-
-        self.assertEqual(self.shown(), ["ShowPicture(%s)" % url])
-        self.assertTrue(self.viewer.is_showing)
-
-    def test_the_previous_file_is_cleaned_up_after_the_swap(self):
-        self.show_now(self.origin + "/one.png")
-        self.on_screen()
-        self.show_now(self.origin + "/two.png")
-
-        self.assertEqual(len(self.cached_files()), 1)
-
-    def test_closing_removes_the_cached_file(self):
-        self.show_now(self.origin + "/photo.png")
-        self.on_screen()
-
-        self.viewer.close()
-
-        self.assertEqual(self.cached_files(), [])
 
 
 class TestViewerLifecycle(ViewerTestCase):
@@ -287,14 +224,6 @@ class TestViewerLifecycle(ViewerTestCase):
         self.viewer.poll()
         self.assertEqual(self.closed, [])
 
-    def test_close_during_a_fetch_cancels_it(self):
-        self.viewer.show(self.origin + "/photo.png")
-        self.viewer.close()
-        self.viewer._worker.join(timeout=10)
-
-        self.assertFalse(self.viewer.is_showing)
-        self.assertEqual(self.shown(), [])
-
 
 class TestPlaybackReporting(unittest.TestCase):
     def setUp(self):
@@ -312,9 +241,6 @@ class TestPlaybackReporting(unittest.TestCase):
 
     def show(self, message):
         main.handle_play(None, message)
-        worker = main.image_viewer._worker
-        if worker:
-            worker.join(timeout=10)
 
     def test_showing_an_image_reports_playing(self):
         main.handle_image(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))

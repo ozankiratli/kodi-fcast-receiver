@@ -85,6 +85,57 @@ class TestStartTime(unittest.TestCase):
         self.assertEqual(player.seeked_to, [])
 
 
+class TestForeignPlayback(unittest.TestCase):
+    """Kodi calls our callbacks for everything it plays, not just our casts.
+
+    Both cases here were seen in the wild on 0.2.0, from a user playing local
+    FLAC music while the add-on was connected. Gapless audio makes onAVStarted
+    arrive after the player has already moved past the item it announced, so
+    getTime() raises instead of returning.
+    """
+
+    def test_time_change_survives_a_player_that_has_moved_on(self):
+        session = FakeSession()
+        player = FCastPlayer([session])
+
+        def gone():
+            raise RuntimeError("Kodi is not playing any media file")
+
+        player.getTime = gone
+
+        player.onPlayBackTimeChanged()  # must not raise
+
+        self.assertEqual(session.playback_updates, [])
+
+    def test_av_started_survives_a_player_that_has_moved_on(self):
+        session = FakeSession()
+        player = FCastPlayer([session])
+        player.start_time = 30.0
+
+        def gone(*args):
+            raise RuntimeError("Kodi is not playing any media file")
+
+        player.seekTime = gone
+        player.getTime = gone
+
+        player.onAVStarted()  # must not raise
+
+        self.assertEqual(session.playback_updates, [])
+
+    def test_duration_failing_is_also_survivable(self):
+        session = FakeSession()
+        player = FCastPlayer([session])
+
+        def gone():
+            raise RuntimeError("Kodi is not playing any media file")
+
+        player.getTotalTime = gone
+
+        player.onPlayBackTimeChanged()
+
+        self.assertEqual(session.playback_updates, [])
+
+
 class TestMediaItemEnd(unittest.TestCase):
     """An item finishing on its own fires MediaItemEnd, not Idle.
 

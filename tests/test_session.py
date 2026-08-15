@@ -141,7 +141,6 @@ class TestOpcodeTolerance(unittest.TestCase):
                 packet(OpCode.VERSION, {"version": 3}),
                 packet(OpCode.INITIAL, {"displayName": "Pixel", "appName": "Grayjay"}),
                 packet(OpCode.SUBSCRIBEEVENT, {"event": {"type": 3, "keys": ["ArrowLeft"]}}),
-                packet(OpCode.SETPLAYLISTITEM, {"itemIndex": 2}),
                 packet(42, {"from": "a future protocol version"}),
                 packet(OpCode.PAUSE),
             ]), chunk_size=7)

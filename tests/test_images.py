@@ -9,7 +9,7 @@ import time
 import unittest
 
 from context import fcast_plugin  # noqa: F401  (sets up sys.path)
-from fcast_plugin import main, settings
+from fcast_plugin import image_cache, main, settings
 from fcast_plugin.image_viewer import ImageViewer, WINDOW_SLIDESHOW
 from fcast_plugin.FCastPackets import EventType, PlayBackState, PlayMessage
 from test_playlist import playlist_message, video
@@ -17,27 +17,45 @@ from test_playlist import playlist_message, video
 import xbmc
 import xbmcaddon
 import xbmcgui
+import xbmcvfs
 
 PNG = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
        b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01'
        b'\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
 
 
+JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 32
+# What a CDN that wants a login sends back, with a 200 and a picture's URL.
+NOT_A_PICTURE = b'<!doctype html><html><body>Sign in</body></html>'
+
+
 class ImageServer(http.server.BaseHTTPRequestHandler):
-    """Serves one picture and records the headers it was asked with."""
+    """Serves pictures, and the ways a picture URL can fail to be one."""
 
     received_headers = {}
+    delay = 0.0
 
     def do_GET(self):
         type(self).received_headers = dict(self.headers)
         if self.path.startswith("/missing"):
             self.send_error(404)
             return
+
+        if self.path.startswith("/slow") and self.delay:
+            time.sleep(self.delay)
+
+        if self.path.startswith("/notapicture"):
+            body, content_type = NOT_A_PICTURE, "image/png"
+        elif self.path.startswith("/photo"):
+            body, content_type = JPEG, "image/jpeg"
+        else:
+            body, content_type = PNG, "image/png"
+
         self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(PNG)))
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(PNG)
+        self.wfile.write(body)
 
     def log_message(self, *args):
         pass
@@ -415,6 +433,11 @@ class TestCountdown(ViewerTestCase):
 class TestPlaybackReporting(unittest.TestCase):
     def setUp(self):
         xbmc.builtins_called.clear()
+        xbmcaddon.reset_settings()
+        # These are about what the viewer and senders do, not about how the
+        # picture arrives, so show it the way the sender sent it - straight
+        # to Kodi, with no download in between to wait for.
+        xbmcaddon.settings[settings.PRELOAD_IMAGES] = False
         xbmcgui.current_window_id = 10000
         xbmcgui.current_dialog_id = 9999
         main.sessions.clear()
@@ -426,6 +449,7 @@ class TestPlaybackReporting(unittest.TestCase):
         main.sessions.clear()
         main.image_viewer.close()
         main.player = self.previous_player
+        xbmcaddon.reset_settings()
 
     def show(self, message):
         main.handle_play(None, message)
@@ -473,12 +497,213 @@ class TestPlaybackReporting(unittest.TestCase):
         self.assertFalse(main.image_viewer.is_showing)
 
 
+class CacheTestCase(ViewerTestCase):
+    def setUp(self):
+        super().setUp()
+        xbmcvfs.temp_dir = self.cache
+        image_cache.clear()
+
+    def cached_files(self):
+        return sorted(os.listdir(image_cache.directory()))
+
+
+class TestImageCache(CacheTestCase):
+
+    def test_a_picture_is_saved_with_the_extension_its_bytes_call_for(self):
+        # Kodi picks the image decoder from the extension, so a cached file
+        # without the right one draws nothing at all - a black screen.
+        png = image_cache.fetch(self.origin + "/p", name="one")
+        jpeg = image_cache.fetch(self.origin + "/photo", name="two")
+
+        self.assertTrue(png.endswith(".png"), png)
+        self.assertTrue(jpeg.endswith(".jpg"), jpeg)
+        with open(png, "rb") as saved:
+            self.assertEqual(saved.read(), PNG)
+
+    def test_the_extension_comes_from_the_bytes_not_the_url(self):
+        # Senders hand out URLs with no extension, or the wrong one.
+        path = image_cache.fetch(self.origin + "/holiday.gif?size=large", name="p")
+
+        self.assertTrue(path.endswith(".png"), path)
+
+    def test_request_headers_are_sent(self):
+        image_cache.fetch(self.origin + "/p.png",
+                          {"Referer": "https://sender/", "User-Agent": "FCast"},
+                          name="p")
+
+        self.assertEqual(ImageServer.received_headers.get("Referer"), "https://sender/")
+        self.assertEqual(ImageServer.received_headers.get("User-Agent"), "FCast")
+
+    def test_a_download_that_fails_caches_nothing(self):
+        self.assertIsNone(image_cache.fetch(self.origin + "/missing.png", name="p"))
+        self.assertEqual(self.cached_files(), [])
+
+    def test_something_that_is_not_a_picture_is_refused(self):
+        # A 200 with an image content type and a sign-in page in the body is
+        # how a CDN answers a request it does not like. Cached and shown, it
+        # is indistinguishable from the add-on being broken.
+        self.assertIsNone(image_cache.fetch(self.origin + "/notapicture.png", name="p"))
+        self.assertEqual(self.cached_files(), [])
+
+    def test_clearing_keeps_the_picture_that_is_on_screen(self):
+        first = image_cache.fetch(self.origin + "/one.png", name="one")
+        second = image_cache.fetch(self.origin + "/two.png", name="two")
+
+        image_cache.clear(keep=second)
+
+        self.assertEqual(self.cached_files(), [os.path.basename(second)])
+        self.assertFalse(os.path.exists(first))
+
+    def test_clearing_everything_leaves_nothing_behind(self):
+        image_cache.fetch(self.origin + "/one.png", name="one")
+
+        image_cache.clear()
+
+        self.assertEqual(self.cached_files(), [])
+
+    def test_bytes_that_identify_no_picture_are_not_guessed_at(self):
+        self.assertEqual(image_cache.extension_for(PNG), ".png")
+        self.assertEqual(image_cache.extension_for(JPEG), ".jpg")
+        self.assertEqual(image_cache.extension_for(b"RIFF\x00\x00\x00\x00WEBPVP8 "), ".webp")
+        self.assertEqual(image_cache.extension_for(b"GIF89a\x00\x00"), ".gif")
+        self.assertIsNone(image_cache.extension_for(NOT_A_PICTURE))
+        self.assertIsNone(image_cache.extension_for(b""))
+
+
+class TestPreloading(CacheTestCase):
+    """Downloading a picture before it goes on screen."""
+
+    def setUp(self):
+        super().setUp()
+        xbmc.builtins_called.clear()
+        xbmcaddon.reset_settings()
+        main.sessions.clear()
+        self.session = FakeSession()
+        main.sessions.append(self.session)
+        self.previous_player, main.player = main.player, FakePlayer()
+        main.playlist = None
+        main.cached_image = None
+
+    def tearDown(self):
+        main.sessions.clear()
+        main.image_viewer.close()
+        main.player = self.previous_player
+        main.playlist = None
+        ImageServer.delay = 0.0
+        xbmcaddon.reset_settings()
+        super().tearDown()
+
+    def shown_paths(self):
+        return [c[len("ShowPicture("):-1] for c in xbmc.builtins_called
+                if c.startswith("ShowPicture(")]
+
+    def cast(self, path="/p.png", headers=None):
+        main.handle_play(None, PlayMessage(container="image/png",
+                                           url=self.origin + path,
+                                           headers=headers))
+
+    def test_a_downloaded_picture_is_what_goes_on_screen(self):
+        self.cast()
+
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        shown = self.shown_paths()[0]
+        self.assertTrue(shown.endswith(".png"), shown)
+        self.assertTrue(os.path.exists(shown))
+
+    def test_turning_preloading_off_hands_the_url_straight_to_kodi(self):
+        xbmcaddon.settings[settings.PRELOAD_IMAGES] = False
+
+        self.cast()
+
+        self.assertEqual(self.shown_paths(), [self.origin + "/p.png"])
+        self.assertEqual(self.cached_files(), [])
+
+    def test_a_download_that_fails_falls_back_to_the_url(self):
+        # Whatever goes wrong, the picture still gets its chance to display:
+        # this is the behaviour the add-on had before caching existed.
+        self.cast("/missing.png")
+
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        self.assertEqual(self.shown_paths(), [self.origin + "/missing.png"])
+
+    def test_headers_go_to_the_download_not_onto_the_path(self):
+        self.cast(headers={"Referer": "https://sender/"})
+
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        self.assertEqual(ImageServer.received_headers.get("Referer"), "https://sender/")
+        self.assertNotIn("|", self.shown_paths()[0])
+
+    def test_a_picture_that_arrives_late_is_thrown_away(self):
+        # Two pictures cast in quick succession: the first download must not
+        # push the second one off the screen when it finally lands.
+        self.cast()
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        xbmc.builtins_called.clear()
+        stale = main.image_request
+
+        main.show_downloaded_image(stale - 1, PlayMessage(
+            container="image/png", url=self.origin + "/old.png"), "url", 0.0)
+
+        self.assertEqual(self.shown_paths(), [])
+
+    def test_starting_a_video_discards_a_picture_still_downloading(self):
+        # Otherwise the picture viewer opens straight back over the video.
+        ImageServer.delay = 0.4
+        self.cast("/slow.png")
+
+        main.handle_play(None, PlayMessage(container="video/mp4", url="https://e/v.mp4"))
+        time.sleep(0.6)
+
+        self.assertEqual(self.shown_paths(), [])
+
+    def test_the_picture_it_replaces_is_cleaned_up(self):
+        self.cast("/one.png")
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+
+        self.cast("/two.png")
+        self.assertTrue(wait_for(lambda: len(self.shown_paths()) == 2))
+
+        self.assertEqual(len(self.cached_files()), 1)
+        self.assertTrue(os.path.exists(self.shown_paths()[1]))
+
+    def test_stopping_clears_the_cache(self):
+        self.cast()
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+
+        main.handle_stop(None)
+
+        self.assertEqual(self.cached_files(), [])
+
+    def test_a_playlist_downloads_each_picture_as_it_comes_round(self):
+        # The two halves of this work together or not at all: the countdown
+        # runs in the poll, and what it moves on to arrives on a thread.
+        def picture(name):
+            return {"container": "image/png", "url": self.origin + "/%s.png" % name,
+                    "showDuration": 0.05}
+
+        main.handle_play(None, playlist_message([picture("one"), picture("two")]))
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
+        main.image_viewer.poll()
+
+        time.sleep(0.06)
+        main.image_viewer.poll()
+
+        self.assertTrue(wait_for(lambda: len(self.shown_paths()) == 2))
+        self.assertEqual(main.playlist.index, 1)
+        for path in self.shown_paths():
+            self.assertTrue(path.endswith(".png"), path)
+            self.assertNotIn(self.origin, path)
+
+
 class TestPictureDuration(unittest.TestCase):
     """showDuration: only playlists, and only as long as the user allows."""
 
     def setUp(self):
         xbmc.builtins_called.clear()
         xbmcaddon.reset_settings()
+        # Not about how the picture arrives - see TestPreloading for that.
+        xbmcaddon.settings[settings.PRELOAD_IMAGES] = False
         xbmcgui.current_window_id = 10000
         xbmcgui.current_dialog_id = 9999
         main.sessions.clear()

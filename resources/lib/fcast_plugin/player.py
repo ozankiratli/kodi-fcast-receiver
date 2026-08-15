@@ -13,17 +13,25 @@ class FCastPlayer(xbmc.Player):
     # Used to perform time updates
     prev_time: int = -1
     get_play_data = None
+    on_media_ended = None
+    get_item_index = None
     # Fallback only. main assigns the sender's PlayMessage.time to the instance
     # before every cast, which shadows this. It matters because Kodi calls our
     # callbacks for anything it plays, including playback we did not start, and
     # onAVStarted would otherwise raise AttributeError.
     start_time: float = 0.0
 
-    def __init__(self, sessions: List[FCastSession], get_play_data=None):
+    def __init__(self, sessions: List[FCastSession], get_play_data=None,
+                 on_media_ended=None, get_item_index=None):
         self.sessions = sessions
         # Supplies the PlayMessage currently on screen, for the item field of
         # media events. Set by main, which owns that state.
         self.get_play_data = get_play_data
+        # Asked when an item finishes: returns True if something else has been
+        # started, which means playback is not over after all.
+        self.on_media_ended = on_media_ended
+        # Playlist position to report in PlaybackUpdate, or None.
+        self.get_item_index = get_item_index
         super().__init__()
 
     def doPause(self) -> None:
@@ -41,7 +49,10 @@ class FCastPlayer(xbmc.Player):
         self.is_paused = False
         if self.start_time > 0.0:
             log(f"Seeking to start time {self.start_time}")
-            self.seekTime(self.start_time)
+            try:
+                self.seekTime(self.start_time)
+            except Exception as e:
+                log(f"Could not seek to start time: {e}")
             self.start_time = 0.0
         self.onPlayBackTimeChanged()
 
@@ -104,6 +115,12 @@ class FCastPlayer(xbmc.Player):
             if not session.send_media_event(EventType.MEDIA_ITEM_END, item):
                 unreached.append(session)
 
+        # A playlist carries on from here, in which case playback is not over
+        # and reporting Idle would tell senders it was.
+        if self.on_media_ended and self.on_media_ended():
+            self.prev_time = -1
+            return
+
         if unreached:
             self.report_idle(sessions=unreached)
         else:
@@ -135,13 +152,23 @@ class FCastPlayer(xbmc.Player):
         self.playback_speed = speed
 
     def onPlayBackTimeChanged(self) -> None:
-        self.prev_time = int(self.getTime())
-        duration=int(self.getTotalTime())
+        # getTime() raises "Kodi is not playing any media file" rather than
+        # returning anything when the player has moved on. Kodi calls these
+        # callbacks for everything it plays, not only what we cast, and with
+        # gapless audio onAVStarted can arrive after playback has already
+        # advanced past the item it was announcing.
+        try:
+            self.prev_time = int(self.getTime())
+            duration = int(self.getTotalTime())
+        except Exception as e:
+            log(f"Skipping playback update, player is not ready: {e}")
+            return
         pb_message = PlayBackUpdateMessage(
             self.prev_time,
             PlayBackState.PAUSED if self.is_paused else PlayBackState.PLAYING,
             speed=self.playback_speed,
-            duration=duration
+            duration=duration,
+            itemIndex=self.get_item_index() if self.get_item_index else None
         )
         for session in self.sessions:
             session.send_playback_update(pb_message)

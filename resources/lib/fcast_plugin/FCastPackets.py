@@ -37,12 +37,14 @@ class PlayBackUpdateMessage:
         state: PlayBackState,
         speed: float = 1.0,
         duration: Optional[float] = None,
-        generationTime: Optional[int] = None
+        generationTime: Optional[int] = None,
+        itemIndex: Optional[int] = None
     ) -> None:
         self.time = time
         self.duration = duration
         self.speed = speed
         self.state = state
+        self.itemIndex = itemIndex
         self.generationTime = generationTime if generationTime else int(datetime.now(timezone.utc).timestamp() * 1000)
 
 class VolumeUpdateMessage:
@@ -137,6 +139,53 @@ class MediaItem:
         self.showDuration = showDuration
         self.headers = headers
         self.metadata = metadata
+
+class ContentType(int, Enum):
+    PLAYLIST = 0
+
+class PlaylistContent:
+    """The body of a Play whose container is application/json.
+
+    Senders hand the receiver a whole queue this way and expect it to walk
+    through the items itself, rather than sending each one in turn.
+    """
+
+    def __init__(self,
+        items = None,
+        offset: Optional[int] = None,
+        volume: Optional[float] = None,
+        speed: Optional[float] = None,
+        forwardCache: Optional[int] = None,
+        backwardCache: Optional[int] = None,
+        metadata = None,
+        contentType: Optional[int] = None
+    ) -> None:
+        self.items = items or []
+        self.offset = offset
+        self.volume = volume
+        self.speed = speed
+        self.forwardCache = forwardCache
+        self.backwardCache = backwardCache
+        self.metadata = metadata
+        self.contentType = contentType
+
+def play_message_from_media_item(
+    item: MediaItem, volume: Optional[float] = None, speed: Optional[float] = None
+) -> PlayMessage:
+    """Turn a playlist entry into the Play request the rest of the code takes.
+
+    Playlist-wide volume and speed apply to items that do not set their own.
+    """
+    return PlayMessage(
+        container=item.container,
+        url=item.url,
+        content=item.content,
+        time=item.time,
+        volume=item.volume if item.volume is not None else volume,
+        speed=item.speed if item.speed is not None else speed,
+        headers=item.headers,
+        metadata=item.metadata,
+    )
 
 class MediaItemEvent:
     def __init__(self, type: int, item: Optional[MediaItem] = None) -> None:

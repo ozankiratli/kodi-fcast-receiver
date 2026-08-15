@@ -46,6 +46,7 @@ class Event(str, Enum):
     SEEK = "seek"
     SET_VOLUME = "set_volume"
     SET_SPEED = "set_speed"
+    SET_PLAYLIST_ITEM = "set_playlist_item"
 
 LENGTH_BYTES = 4
 MAXIMUM_PACKET_LENGTH = 32000
@@ -55,29 +56,33 @@ MAXIMUM_PACKET_LENGTH = 32000
 # and events only exist from v3, so a v2 receiver can never tell a sender that
 # an item finished in a way it will act on.
 #
-# Not yet implemented from v3: playlist content (`application/json` carrying
-# PlaylistContent) and key events. A sender that casts a playlist gets an
-# "unhandled container" notification rather than playback.
+# Not yet implemented from v3: key events, and the forwardCache/backwardCache
+# preloading hints on playlists.
 FCAST_VERSION = 3
 
 
-def message_from_json(message_class, body: bytes):
+def message_from_fields(message_class, fields: dict):
     """Build a message object, dropping fields this receiver does not know.
 
     Senders on a newer protocol version add fields freely - v3 added `volume`
     and `metadata` to PlayMessage alone. Passing those straight into the
     constructor raises TypeError, which used to kill the whole session.
     """
-    fields = json.loads(body)
-    if not isinstance(fields, dict):
-        raise ValueError(f"expected a JSON object, got {type(fields).__name__}")
-
     accepted = inspect.signature(message_class).parameters
     unknown = sorted(set(fields) - set(accepted))
     if unknown:
         log(f"Ignoring unknown {message_class.__name__} fields: {', '.join(unknown)}")
 
     return message_class(**{k: v for k, v in fields.items() if k in accepted})
+
+
+def message_from_json(message_class, body: bytes):
+    """As message_from_fields, from a JSON object body."""
+    fields = json.loads(body)
+    if not isinstance(fields, dict):
+        raise ValueError(f"expected a JSON object, got {type(fields).__name__}")
+
+    return message_from_fields(message_class, fields)
 
 class FCastSession:
 
@@ -285,6 +290,9 @@ class FCastSession:
             self.__emit(Event.SET_SPEED, message_from_json(SetSpeedMessage, body) if body else None)
         elif opcode == OpCode.PING:
             self.__send(OpCode.PONG)
+        elif opcode == OpCode.SETPLAYLISTITEM:
+            self.__emit(Event.SET_PLAYLIST_ITEM,
+                        message_from_json(SetPlaylistItemMessage, body) if body else None)
         elif opcode == OpCode.VERSION:
             self.__handle_version(body)
         elif opcode == OpCode.INITIAL:

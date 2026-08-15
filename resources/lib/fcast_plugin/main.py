@@ -14,6 +14,7 @@ from .FCastPackets import *
 from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
 from .image_viewer import ImageViewer
+from .playlist import Playlist, is_playlist, parse_playlist
 from .util import log, notify, debounce
 from .mdns import register as mdns_register, unregister as mdns_unregister
 
@@ -46,6 +47,9 @@ current_play_message: Optional[PlayMessage] = None
 
 # Last volume published to senders, so the poll only speaks up on a change.
 last_volume: Optional[float] = None
+
+# The queue a sender handed over, if any. None when playing a single item.
+playlist: Optional[Playlist] = None
 
 # Pictures bypass the player entirely, so they get their own viewer. The
 # lambda defers resolving the callback, which is defined further down.
@@ -84,9 +88,14 @@ def check_player():
     ticks = 0
     while not monitor.abortRequested():
         if player and player.isPlaying():
-            # Update the current time if it has changed
-            if int(player.getTime()) != player.prev_time:
-                player.onPlayBackTimeChanged()
+            try:
+                # Update the current time if it has changed
+                if int(player.getTime()) != player.prev_time:
+                    player.onPlayBackTimeChanged()
+            except Exception:
+                # isPlaying() can still be true a moment after playback ends,
+                # and getTime() then raises rather than returning.
+                pass
 
         # Volume needs polling too, but once a second is plenty - the
         # position above is what needs the 20Hz.
@@ -224,6 +233,72 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
 
 def handle_play(session: FCastSession, message = None):
     log(f"Client request play")
+
+    if not message:
+        return
+
+    global playlist
+    if is_playlist(message):
+        start_playlist(message)
+        return
+
+    # A single item supersedes whatever queue was running.
+    playlist = None
+    play_message(message)
+
+def start_playlist(message: PlayMessage) -> None:
+    """Take over a queue the sender handed us and start at its offset."""
+    global playlist
+
+    try:
+        content = parse_playlist(message)
+    except Exception as e:
+        log(f"Could not read playlist: {e}", xbmc.LOGWARNING)
+        notify('Could not read playlist', xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    if content is None or not content.items:
+        notify('Playlist is empty', xbmcgui.NOTIFICATION_WARNING)
+        return
+
+    playlist = Playlist(content)
+    log(f"Playing playlist of {len(playlist)} items from index {playlist.index}")
+    play_message(playlist.play_message())
+
+def advance_playlist() -> bool:
+    """Start the next queued item. True if something was started.
+
+    Called when an item finishes. Returning False lets the caller report that
+    playback is over.
+    """
+    global playlist
+
+    if playlist is None:
+        return False
+
+    if playlist.advance() is None:
+        log("End of playlist")
+        playlist = None
+        return False
+
+    log(f"Playlist advancing to item {playlist.index}")
+    play_message(playlist.play_message())
+    return True
+
+def handle_set_playlist_item(session: FCastSession, message: SetPlaylistItemMessage):
+    log(f"Client request playlist item {message.itemIndex}")
+
+    if playlist is None:
+        return
+    if playlist.select(int(message.itemIndex)) is None:
+        return
+    play_message(playlist.play_message())
+
+def current_item_index() -> Optional[int]:
+    """Playlist position for PlaybackUpdate, or None when not playing a queue."""
+    return playlist.index if playlist is not None else None
+
+def play_message(message = None):
     play_item: Optional[xbmcgui.ListItem] = None
     url: str = ""
 
@@ -328,8 +403,9 @@ def handle_seek(session: FCastSession, message = None):
     debounce(do_seek, 0.15)()
 
 def handle_stop(session: FCastSession, message = None):
-    global player
+    global player, playlist
     log(f"Client request stop")
+    playlist = None
     # Ask the viewer first: it reports whether there was a picture to
     # dismiss, so a stale is_showing cannot swallow the request.
     if image_viewer.close():
@@ -465,6 +541,7 @@ def connection_handler(conn: socket.socket, addr):
     session.on(Event.SEEK, handle_seek)
     session.on(Event.SET_VOLUME, handle_volume)
     session.on(Event.SET_SPEED, handle_speed)
+    session.on(Event.SET_PLAYLIST_ITEM, handle_set_playlist_item)
 
     # So the sender's volume control starts out in the right place.
     volume = get_kodi_volume()
@@ -513,7 +590,9 @@ def main():
     s.settimeout(FCAST_TIMEOUT / 1000)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    player = FCastPlayer(sessions, get_play_data=get_last_play_data)
+    player = FCastPlayer(sessions, get_play_data=get_last_play_data,
+                         on_media_ended=advance_playlist,
+                         get_item_index=current_item_index)
     player_thread = Thread(target=check_player)
     player_thread.start()
 

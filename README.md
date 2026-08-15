@@ -58,7 +58,8 @@ Enable the following Kodi setting for speed control:
 **Settings → Add-ons → My add-ons → Services → FCast Receiver → Configure**
 
 * **General → Show on-screen notifications** — the messages shown when a sender connects, disconnects or starts something playing. Turn them off to keep the screen clear; errors are always shown regardless.
-* **Playlists → Picture duration** — how long a picture in a cast playlist stays on screen before the queue moves on. A sender that asks for a duration of its own gets it, unless **Ignore the duration the sender asks for** is set. **Off** leaves each picture up until the sender moves on.
+* **Pictures → Download pictures before showing them** — Kodi's picture viewer clears what is on screen the moment it is told to show something else, so casting a second photo left the screen black for the length of the download. With this on, the picture already up stays there while the next one is fetched, and they swap when it is ready. Turn it off to hand the URL straight to Kodi as before.
+* **Pictures → Picture duration** — how long a picture in a cast playlist stays on screen before the queue moves on. A sender that asks for a duration of its own gets it, unless **Ignore the duration the sender asks for** is set. **Off** leaves each picture up until the sender moves on.
 
   A picture cast on its own is never closed automatically, whatever this is set to. It stays up until a sender stops it or you close it from Kodi.
 

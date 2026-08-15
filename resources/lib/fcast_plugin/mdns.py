@@ -13,6 +13,8 @@ import subprocess
 import time
 from typing import Dict, List, Optional
 
+import xbmc
+
 from .util import log, addonname, addonversion
 
 SERVICE_TYPE = "_fcast._tcp"
@@ -216,13 +218,21 @@ def register(port: int = SERVICE_PORT, protocol_version: int = 2) -> bool:
             continue
 
         _backend = backend
+        # Above debug level: "are senders able to find this box" is the first
+        # question every discovery problem starts with, and the answer should
+        # not need Kodi's debug logging turned on to read.
         log(
             f"mDNS: registered '{service_name}' as {SERVICE_TYPE}:{port} "
-            f"via {backend.name}"
+            f"via {backend.name}",
+            xbmc.LOGINFO,
         )
         return True
 
-    log(f"mDNS: no backend could register the service ({'; '.join(failures)})")
+    # Not fatal - senders can still be pointed at this box by IP - but it is
+    # the difference between the add-on appearing in a sender's device list
+    # and not, so it says so where it can be seen.
+    log(f"mDNS: no backend could register the service ({'; '.join(failures)})",
+        xbmc.LOGWARNING)
     return False
 
 

@@ -24,4 +24,26 @@ class Monitor:
 
 class Player:
     def __init__(self, *a, **k):
+        self.seeked_to = []
+        self.playing = False
+        self.time = 0.0
+        self.total_time = 0.0
+
+    def isPlaying(self):
+        return self.playing
+
+    def getTime(self):
+        return self.time
+
+    def getTotalTime(self):
+        return self.total_time
+
+    def seekTime(self, seconds):
+        self.seeked_to.append(seconds)
+        self.time = seconds
+
+    def pause(self):
         pass
+
+    def play(self, *a, **k):
+        self.playing = True

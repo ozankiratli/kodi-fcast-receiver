@@ -44,9 +44,14 @@ def check_player():
     monitor = xbmc.Monitor()
     while not monitor.abortRequested():
         if player and player.isPlaying():
-            # Update the current time if it has changed
-            if int(player.getTime()) != player.prev_time:
-                player.onPlayBackTimeChanged()
+            try:
+                # Update the current time if it has changed
+                if int(player.getTime()) != player.prev_time:
+                    player.onPlayBackTimeChanged()
+            except Exception:
+                # isPlaying() can still be true a moment after playback ends,
+                # and getTime() then raises rather than returning.
+                pass
 
         if monitor.waitForAbort(0.05):
             break

@@ -11,6 +11,11 @@ class FCastPlayer(xbmc.Player):
     is_paused: bool = False
     # Used to perform time updates
     prev_time: int = -1
+    # Fallback only. main assigns the sender's PlayMessage.time to the instance
+    # before every cast, which shadows this. It matters because Kodi calls our
+    # callbacks for anything it plays, including playback we did not start, and
+    # onAVStarted would otherwise raise AttributeError.
+    start_time: float = 0.0
 
     def __init__(self, sessions: List[FCastSession]):
         self.sessions = sessions
@@ -31,7 +36,10 @@ class FCastPlayer(xbmc.Player):
         self.is_paused = False
         if self.start_time > 0.0:
             log(f"Seeking to start time {self.start_time}")
-            self.seekTime(self.start_time)
+            try:
+                self.seekTime(self.start_time)
+            except Exception as e:
+                log(f"Could not seek to start time: {e}")
             self.start_time = 0.0
         self.onPlayBackTimeChanged()
 
@@ -59,8 +67,17 @@ class FCastPlayer(xbmc.Player):
         self.playback_speed = speed
 
     def onPlayBackTimeChanged(self) -> None:
-        self.prev_time = int(self.getTime())
-        duration=int(self.getTotalTime())
+        # getTime() raises "Kodi is not playing any media file" rather than
+        # returning anything when the player has moved on. Kodi calls these
+        # callbacks for everything it plays, not only what we cast, and with
+        # gapless audio onAVStarted can arrive after playback has already
+        # advanced past the item it was announcing.
+        try:
+            self.prev_time = int(self.getTime())
+            duration = int(self.getTotalTime())
+        except Exception as e:
+            log(f"Skipping playback update, player is not ready: {e}")
+            return
         pb_message = PlayBackUpdateMessage(
             self.prev_time,
             PlayBackState.PAUSED if self.is_paused else PlayBackState.PLAYING,

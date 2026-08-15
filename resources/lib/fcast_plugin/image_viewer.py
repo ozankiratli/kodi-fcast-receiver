@@ -55,18 +55,31 @@ class ImageViewer:
             self._confirmed = False
             self._opened_at = time.time()
 
-    def close(self) -> None:
-        if not self._showing:
-            return
+    def close(self) -> bool:
+        """Dismiss the picture viewer. Returns True if there was one to dismiss.
 
-        # Only send the action when the viewer is genuinely on screen. Back is
-        # a global input action, and firing it blind would hit whatever else
-        # happens to be focused.
-        if self._on_screen():
-            xbmc.executebuiltin('Action(Back)')
+        ACTION_STOP, not Back. Stop is what Kodi binds to X by default, which
+        is the action that actually exits the picture viewer, and it is safe
+        to send when nothing is showing - it stops playback that is not
+        happening. Back would navigate whatever is focused instead.
+
+        Deliberately acts on either our own state or the window actually being
+        up, so a sender's Stop still works if the two have drifted apart.
+        """
+        on_screen = self._on_screen()
+        if not self._showing and not on_screen:
+            return False
+
+        log(f"Closing image viewer (tracked={self._showing}, on screen={on_screen})")
+        xbmc.executebuiltin('Action(Stop)')
 
         self._showing = False
         self._confirmed = False
+        return True
+
+    @property
+    def is_on_screen(self) -> bool:
+        return self._on_screen()
 
     def poll(self) -> None:
         """Notice the viewer being dismissed from the Kodi UI."""

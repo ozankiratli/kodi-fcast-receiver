@@ -327,8 +327,9 @@ def handle_seek(session: FCastSession, message = None):
 def handle_stop(session: FCastSession, message = None):
     global player
     log(f"Client request stop")
-    if image_viewer.is_showing:
-        image_viewer.close()
+    # Ask the viewer first: it reports whether there was a picture to
+    # dismiss, so a stale is_showing cannot swallow the request.
+    if image_viewer.close():
         broadcast_playback_state(PlayBackState.IDLE)
         return
     if player:

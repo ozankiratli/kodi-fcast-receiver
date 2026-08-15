@@ -64,6 +64,8 @@ else
 	@echo "deployed $(VERSION) to $(KODI_HOST):$(KODI_ADDON_DIR)"
 endif
 	@echo "restart the service: disable/enable it in Settings > Add-ons, or restart Kodi"
+	@echo "changed resources/language? restart Kodi itself - add-on strings are only"
+	@echo "loaded at start-up, so settings labels stay blank until it does"
 
 # Same thing for hosts with no rsync -- notably LibreELEC and CoreELEC, whose
 # base images ship neither rsync nor git nor make. Needs only ssh and tar on
@@ -86,6 +88,8 @@ endif
 	@echo "deployed $(VERSION) to $(KODI_HOST):$(KODI_ADDON_DIR)"
 	@echo "previous install kept at $(KODI_ADDON_DIR).bak"
 	@echo "restart the service: disable/enable it in Settings > Add-ons, or restart Kodi"
+	@echo "changed resources/language? restart Kodi itself - add-on strings are only"
+	@echo "loaded at start-up, so settings labels stay blank until it does"
 
 # Build the static Kodi repository tree (addons.xml + md5 + zips) in repo/.
 repo: $(ZIP)

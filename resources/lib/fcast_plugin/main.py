@@ -43,6 +43,9 @@ seeks: list[float] = []
 # same thing.
 current_play_message: Optional[PlayMessage] = None
 
+# Last volume published to senders, so the poll only speaks up on a change.
+last_volume: Optional[float] = None
+
 def get_current_play_data() -> Optional[PlayMessage]:
     """What is playing right now, or None if nothing is.
 
@@ -73,11 +76,19 @@ def check_player():
     global player
     log("Starting player thread")
     monitor = xbmc.Monitor()
+    ticks = 0
     while not monitor.abortRequested():
         if player and player.isPlaying():
             # Update the current time if it has changed
             if int(player.getTime()) != player.prev_time:
                 player.onPlayBackTimeChanged()
+
+        # Volume needs polling too, but once a second is plenty - the
+        # position above is what needs the 20Hz.
+        ticks += 1
+        if ticks >= 20:
+            ticks = 0
+            check_volume()
 
         if monitor.waitForAbort(0.05):
             break
@@ -266,11 +277,64 @@ def handle_resume(session: FCastPlayer, message = None):
     if player:
         player.doResume()
 
+def kodi_jsonrpc(method: str, params: Optional[dict] = None):
+    """Call Kodi's JSON-RPC. Returns the result, or None if the call failed."""
+    request = {"jsonrpc": "2.0", "method": method, "id": 1}
+    if params:
+        request["params"] = params
+
+    try:
+        response = json.loads(xbmc.executeJSONRPC(json.dumps(request)))
+    except Exception as e:
+        log(f"JSON-RPC {method} failed: {e}", xbmc.LOGWARNING)
+        return None
+
+    if "error" in response:
+        log(f"JSON-RPC {method} error: {response['error']}", xbmc.LOGWARNING)
+        return None
+    return response.get("result")
+
+def get_kodi_volume() -> Optional[float]:
+    """Kodi's volume as the 0-1 float FCast uses, or None if unavailable.
+
+    Muted reads as zero: senders have no separate mute concept, so anything
+    else would show a volume level while nothing is audible.
+    """
+    result = kodi_jsonrpc("Application.GetProperties",
+                          {"properties": ["volume", "muted"]})
+    if not isinstance(result, dict):
+        return None
+    if result.get("muted"):
+        return 0.0
+    return result.get("volume", 0) / 100.0
+
+def broadcast_volume_update(volume: float) -> None:
+    message = VolumeUpdateMessage(volume)
+    for session in list(sessions):
+        session.send_volume_update(message)
+
+def check_volume() -> None:
+    """Publish volume changes. Kodi offers no callback for this, so poll."""
+    global last_volume
+
+    volume = get_kodi_volume()
+    if volume is None or volume == last_volume:
+        return
+
+    last_volume = volume
+    broadcast_volume_update(volume)
+
 def handle_volume(session: FCastSession, message: SetVolumeMessage):
-    global player
+    global last_volume
     log(f"Client request set volume at {message.volume}")
-    volume_level = int(message.volume * 100)
-    xbmc.executebuiltin(f'SetVolume({volume_level})')
+
+    volume = max(0.0, min(1.0, float(message.volume)))
+    if kodi_jsonrpc("Application.SetVolume", {"volume": int(round(volume * 100))}) is None:
+        return
+
+    # Record it here as well as in the poll, so the change we just made is not
+    # then echoed back to every sender as if someone else had made it.
+    last_volume = volume
 
 # NOTE: For SetTempo (fine-grained speed) to work, "Sync playback to display"
 # must be enabled: Settings -> Player -> Videos -> Sync playback to display
@@ -324,9 +388,13 @@ def connection_handler(conn: socket.socket, addr):
     session.on(Event.PAUSE, handle_pause)
     session.on(Event.RESUME, handle_resume)
     session.on(Event.SEEK, handle_seek)
-    # TODO: Find out how to get/set volume
-    # session.on(Event.SET_VOLUME, handle_volume)
+    session.on(Event.SET_VOLUME, handle_volume)
     session.on(Event.SET_SPEED, handle_speed)
+
+    # So the sender's volume control starts out in the right place.
+    volume = get_kodi_volume()
+    if volume is not None:
+        session.send_volume_update(VolumeUpdateMessage(volume))
 
     # Allow Kodi to send playback update packets to this client
     if player:

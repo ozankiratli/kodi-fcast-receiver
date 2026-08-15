@@ -46,12 +46,24 @@ current_play_message: Optional[PlayMessage] = None
 def get_current_play_data() -> Optional[PlayMessage]:
     """What is playing right now, or None if nothing is.
 
-    Gated on the player rather than cleared on stop, so it cannot go stale if
-    playback ends by a route that does not run through us.
+    For the Initial handshake, where a sender connecting mid-playback needs to
+    know what is on screen. Gated on the player rather than cleared on stop,
+    so it cannot go stale if playback ends by a route that does not run
+    through us.
     """
     if player and player.isPlaying():
         return current_play_message
     return None
+
+def get_last_play_data() -> Optional[PlayMessage]:
+    """The most recent Play request, playing or not.
+
+    Media events fire *after* the player has torn down, so this must not be
+    gated on isPlaying() the way the handshake's view is - senders match the
+    item in a MediaItemEnd against their own queue entry, and a null item
+    tells them nothing.
+    """
+    return current_play_message
 
 def broadcast_play_update() -> None:
     for session in list(sessions):
@@ -358,7 +370,7 @@ def main():
     s.settimeout(FCAST_TIMEOUT / 1000)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    player = FCastPlayer(sessions, get_play_data=get_current_play_data)
+    player = FCastPlayer(sessions, get_play_data=get_last_play_data)
     player_thread = Thread(target=check_player)
     player_thread.start()
 

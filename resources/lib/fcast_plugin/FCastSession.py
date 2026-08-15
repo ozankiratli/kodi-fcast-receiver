@@ -155,7 +155,10 @@ class FCastSession:
     def __send(self, opcode: OpCode, message = None):
 
         def default(o):
-            return o.__dict__
+            # Drop unset fields rather than sending explicit nulls. The
+            # protocol treats absent and null alike, the reference receiver
+            # omits them, and it keeps big messages under the 32KB ceiling.
+            return {k: v for k, v in o.__dict__.items() if v is not None}
 
         if not self.client:
             return

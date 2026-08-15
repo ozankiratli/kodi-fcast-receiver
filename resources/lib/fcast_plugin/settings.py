@@ -16,12 +16,14 @@ import xbmcaddon
 SHOW_NOTIFICATIONS = 'show_notifications'
 PLAYLIST_IMAGE_DURATION = 'playlist_image_duration'
 PLAYLIST_IMAGE_DURATION_OVERRIDE = 'playlist_image_duration_override'
+PRELOAD_IMAGES = 'preload_images'
 
 # Also what settings.xml declares as each setting's <default>.
 DEFAULTS = {
     SHOW_NOTIFICATIONS: True,
     PLAYLIST_IMAGE_DURATION: 10,
     PLAYLIST_IMAGE_DURATION_OVERRIDE: False,
+    PRELOAD_IMAGES: True,
 }
 
 
@@ -64,3 +66,8 @@ def image_duration() -> float:
 def image_duration_overrides_sender() -> bool:
     """Whether the user's duration wins over the one the sender asked for."""
     return get_bool(PLAYLIST_IMAGE_DURATION_OVERRIDE)
+
+
+def preload_images() -> bool:
+    """Whether to download a picture before putting it on screen."""
+    return get_bool(PRELOAD_IMAGES)

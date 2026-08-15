@@ -22,8 +22,15 @@
             </group>
         </category>
 
-        <category id="playlists" label="32010">
+        <category id="pictures" label="32010">
             <group id="1" label="32011">
+                <setting id="preload_images" type="boolean" label="32016" help="32017">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
+            </group>
+            <group id="2" label="32018">
                 <setting id="playlist_image_duration" type="integer" label="32012" help="32013">
                     <level>0</level>
                     <default>10</default>

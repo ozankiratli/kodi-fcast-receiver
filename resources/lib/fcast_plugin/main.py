@@ -1,6 +1,7 @@
 import sys
 import json
 import socket
+from itertools import count
 from threading import Thread
 from typing import List, Optional
 import xbmcgui
@@ -14,6 +15,7 @@ from .FCastPackets import *
 from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
 from .image_viewer import ImageViewer
+from . import image_cache
 from .playlist import Playlist, is_playlist, parse_playlist
 from . import settings
 from .util import log, notify, debounce
@@ -51,6 +53,14 @@ last_volume: Optional[float] = None
 
 # The queue a sender handed over, if any. None when playing a single item.
 playlist: Optional[Playlist] = None
+
+# Identifies picture requests, so a download that finishes after the next one
+# was asked for knows it has been superseded and drops what it fetched. The
+# counter is stepped from the connection threads and from the player thread,
+# hence itertools.count: next() on it is a single C call, where += would be a
+# read and a write with room in between.
+image_requests = count(1)
+image_request: int = 0
 
 # Pictures bypass the player entirely, so they get their own viewer. The
 # lambdas defer resolving the callbacks, which are defined further down.
@@ -209,6 +219,7 @@ def broadcast_playback_state(state: PlayBackState, position: float = 0.0) -> Non
 def on_image_closed() -> None:
     """The picture viewer went away, so senders should stop showing it."""
     log("Image viewer closed")
+    image_cache.clear()
     broadcast_playback_state(PlayBackState.IDLE)
 
 def image_show_duration() -> float:
@@ -253,13 +264,22 @@ def on_image_expired() -> None:
     image_viewer.close()
     broadcast_playback_state(PlayBackState.IDLE)
 
+def cancel_pending_image() -> None:
+    """Abandon a picture that is still downloading.
+
+    A download that lands after a video has started would put the picture
+    viewer straight back over the top of it.
+    """
+    global image_request
+    image_request = next(image_requests)
+
 def handle_image(message: PlayMessage, headers: str = "") -> None:
     """Put a still picture on screen and report it as playing.
 
     There is no player to ask about state afterwards, so the Playing update
     goes out here and the matching Idle comes from on_image_closed.
     """
-    global current_play_message
+    global current_play_message, image_request
 
     if player and player.isPlaying():
         xbmc.executebuiltin('PlayerControl(Stop)')
@@ -271,9 +291,38 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
 
     current_play_message = message
     notify('Showing image ...')
-    image_viewer.show(url, duration=image_show_duration())
+
+    image_request = next(image_requests)
+    duration = image_show_duration()
+
+    if settings.preload_images():
+        # Off the connection thread: the sender has more to say to us than
+        # this, and a photo takes as long as it takes.
+        request = image_request
+        Thread(target=lambda: show_downloaded_image(request, message, url, duration),
+               daemon=True).start()
+    else:
+        image_viewer.show(url, duration=duration)
+
     broadcast_playback_state(PlayBackState.PLAYING)
     broadcast_play_update()
+
+def show_downloaded_image(request: int, message: PlayMessage, url: str,
+                          duration: float) -> None:
+    """Fetch a picture, then show it - leaving the last one up until it lands."""
+    path = image_cache.fetch(message.url, message.headers, name=f'picture-{request}')
+
+    if request != image_request:
+        # Something else was cast while this was downloading, and it has the
+        # screen now.
+        log("Discarding a picture that arrived too late")
+        image_cache.remove(path)
+        return
+
+    image_viewer.show(path or url, duration=duration)
+
+    # The one it replaced is no longer being drawn from.
+    image_cache.clear(keep=path)
 
 def handle_play(session: FCastSession, message = None):
     log(f"Client request play")
@@ -397,6 +446,7 @@ def play_message(message = None):
         global current_play_message
         # The picture viewer sits above the video window, so a picture left on
         # screen hides the video entirely rather than being replaced by it.
+        cancel_pending_image()
         image_viewer.close()
         notify('Starting player ...')
         play_item.setPath(url)
@@ -452,6 +502,8 @@ def handle_stop(session: FCastSession, message = None):
     global player, playlist
     log(f"Client request stop")
     playlist = None
+    cancel_pending_image()
+    image_cache.clear()
     # Ask the viewer first: it reports whether there was a picture to
     # dismiss, so a stale is_showing cannot swallow the request.
     if image_viewer.close():
@@ -655,6 +707,10 @@ def main():
     http_server = FCastHTTPServer()
     http_server.start()
 
+    # Anything still in here is left over from a previous run that did not
+    # get to clean up after itself.
+    image_cache.clear()
+
     try:
         s.bind((FCAST_HOST, FCAST_PORT))
         s.listen()
@@ -695,6 +751,7 @@ def main():
     s.close()
 
     http_server.stop()
+    image_cache.clear()
 
     notify("Server stopped")
     exit()

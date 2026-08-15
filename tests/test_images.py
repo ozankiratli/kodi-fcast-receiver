@@ -106,6 +106,7 @@ class ViewerTestCase(unittest.TestCase):
     def setUp(self):
         xbmc.builtins_called.clear()
         xbmcgui.current_window_id = 10000
+        xbmcgui.current_dialog_id = 9999
         ImageServer.received_headers = {}
         self.closed = []
         self.cache = tempfile.mkdtemp()
@@ -124,10 +125,11 @@ class ViewerTestCase(unittest.TestCase):
         return os.listdir(self.cache)
 
     def on_screen(self):
-        xbmcgui.current_window_id = WINDOW_SLIDESHOW
+        # Kodi reports the picture viewer as the current dialog, not window.
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
 
     def off_screen(self):
-        xbmcgui.current_window_id = 10000
+        xbmcgui.current_dialog_id = 9999
 
 
 class TestViewerLifecycle(ViewerTestCase):
@@ -220,6 +222,35 @@ class TestViewerLifecycle(ViewerTestCase):
         self.assertFalse(self.viewer.is_showing)
         self.assertEqual(self.closed, [True])
 
+    def test_detection_accepts_either_the_window_or_the_dialog_id(self):
+        """The viewer is a CGUIDialog, so it reports through the dialog id.
+
+        Checking only getCurrentWindowId() meant this was always False, which
+        made the poll declare the viewer dead five seconds in and left a
+        sender's Stop with nothing to act on.
+        """
+        self.off_screen()
+        self.assertFalse(self.viewer.is_on_screen)
+
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
+        self.assertTrue(self.viewer.is_on_screen)
+
+        xbmcgui.current_dialog_id = 9999
+        xbmcgui.current_window_id = WINDOW_SLIDESHOW
+        self.assertTrue(self.viewer.is_on_screen)
+        xbmcgui.current_window_id = 10000
+
+    def test_a_visible_viewer_is_not_declared_dead_by_the_poll(self):
+        self.show_now("https://e/p.jpg")
+        self.on_screen()
+        self.viewer._opened_at -= 99  # well past the open timeout
+
+        for _ in range(5):
+            self.viewer.poll()
+
+        self.assertTrue(self.viewer.is_showing)
+        self.assertEqual(self.closed, [])
+
     def test_poll_does_nothing_when_no_image_was_shown(self):
         self.viewer.poll()
         self.assertEqual(self.closed, [])
@@ -229,6 +260,7 @@ class TestPlaybackReporting(unittest.TestCase):
     def setUp(self):
         xbmc.builtins_called.clear()
         xbmcgui.current_window_id = 10000
+        xbmcgui.current_dialog_id = 9999
         main.sessions.clear()
         self.session = FakeSession()
         main.sessions.append(self.session)
@@ -254,7 +286,7 @@ class TestPlaybackReporting(unittest.TestCase):
 
     def test_sender_stop_dismisses_the_picture_and_reports_idle(self):
         self.show(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
-        xbmcgui.current_window_id = WINDOW_SLIDESHOW
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
         xbmc.builtins_called.clear()
         self.session.playback_updates.clear()
 
@@ -276,7 +308,7 @@ class TestPlaybackReporting(unittest.TestCase):
         # The picture viewer sits above the video window, so a picture left up
         # hides the video completely.
         self.show(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
-        xbmcgui.current_window_id = WINDOW_SLIDESHOW
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
         xbmc.builtins_called.clear()
 
         main.handle_play(None, PlayMessage(container="video/mp4", url="https://e/v.mp4"))

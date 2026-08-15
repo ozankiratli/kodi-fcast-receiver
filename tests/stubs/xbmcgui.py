@@ -2,13 +2,18 @@ NOTIFICATION_INFO, NOTIFICATION_WARNING, NOTIFICATION_ERROR = 0, 1, 2
 
 notifications = []
 
-# Which window Kodi is currently showing; tests set this to 12007 to simulate
-# the picture viewer being on screen.
+# Which window Kodi is currently showing, and which dialog is on top of it.
+# The picture viewer is a dialog, so it reports through the latter.
 current_window_id = 10000
+current_dialog_id = 9999
 
 
 def getCurrentWindowId():
     return current_window_id
+
+
+def getCurrentWindowDialogId():
+    return current_dialog_id
 
 class Dialog:
     def notification(self, heading, message, icon=NOTIFICATION_INFO, time=5000, sound=True):

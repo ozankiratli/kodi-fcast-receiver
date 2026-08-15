@@ -10,3 +10,6 @@ repo/
 # Cache
 __pycache__/
 *.pyc
+
+# Temp files
+.tmp/

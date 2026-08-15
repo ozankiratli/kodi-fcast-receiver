@@ -7,8 +7,11 @@ messages = []
 def log(msg, level=LOGDEBUG):
     messages.append((level, msg))
 
+builtins_called = []
+
+
 def executebuiltin(command, wait=False):
-    pass
+    builtins_called.append(command)
 
 def sleep(millis):
     pass

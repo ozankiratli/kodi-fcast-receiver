@@ -459,6 +459,24 @@ class TestPlaybackReporting(unittest.TestCase):
 
         self.assertEqual(self.session.playback_updates[0].state, PlayBackState.PLAYING)
 
+    def test_senders_are_told_which_picture_is_on_screen(self):
+        # A picture never reaches the player, so asking the player what is
+        # playing reports nothing: every PlayUpdate sent while a photo was up
+        # carried an empty playData, and a sender connecting to a receiver
+        # with a photo on screen was told it was idle.
+        message = PlayMessage(container="image/jpeg", url="https://e/p.jpg")
+
+        main.handle_image(message)
+
+        self.assertIs(main.get_current_play_data(), message)
+        self.assertIs(self.session.play_updates[-1], message)
+
+    def test_nothing_is_reported_once_the_picture_has_gone(self):
+        main.handle_image(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        main.image_viewer.close()
+
+        self.assertIsNone(main.get_current_play_data())
+
     def test_closing_reports_idle(self):
         main.on_image_closed()
 

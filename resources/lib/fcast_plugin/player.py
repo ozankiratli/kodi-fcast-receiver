@@ -16,6 +16,12 @@ class FCastPlayer(xbmc.Player):
     # callbacks for anything it plays, including playback we did not start, and
     # onAVStarted would otherwise raise AttributeError.
     start_time: float = 0.0
+    # Whether the playback Kodi is reporting on is ours. It calls these
+    # callbacks for everything it plays, so without this the add-on acts on
+    # the user's own music: every track end triggered a PlayerControl(Stop)
+    # that killed the track Kodi had just started, cutting an album to
+    # seconds per song.
+    owns_playback: bool = False
 
     def __init__(self, sessions: List[FCastSession]):
         self.sessions = sessions
@@ -32,6 +38,8 @@ class FCastPlayer(xbmc.Player):
             self.pause()
 
     def onAVStarted(self) -> None:
+        if not self.owns_playback:
+            return
         log("Playback started")
         self.is_paused = False
         if self.start_time > 0.0:
@@ -44,29 +52,53 @@ class FCastPlayer(xbmc.Player):
         self.onPlayBackTimeChanged()
 
     def onPlayBackStopped(self) -> None:
-        xbmc.executebuiltin('PlayerControl(Stop)')
-        self.onPlayBackEnded()
+        if not self.owns_playback:
+            return
+        self.owns_playback = False
+        self.report_stopped()
 
     def onPlayBackPaused(self) -> None:
+        if not self.owns_playback:
+            return
         self.is_paused = True
         self.onPlayBackTimeChanged()
 
     def onPlayBackResumed(self) -> None:
+        if not self.owns_playback:
+            return
         self.is_paused = False
 
     def onPlayBackEnded(self) -> None:
+        if not self.owns_playback:
+            return
+        self.owns_playback = False
+        self.report_stopped()
+
+    def onPlayBackError(self) -> None:
+        if not self.owns_playback:
+            return
+        self.owns_playback = False
+        self.report_stopped()
+
+    def report_stopped(self) -> None:
+        """Wind up our own playback and tell the senders.
+
+        Kept as a separate method rather than chaining the callbacks into one
+        another: each of them clears owns_playback first, so a chained call
+        would find the flag already false and return without notifying.
+        """
         xbmc.executebuiltin('PlayerControl(Stop)')
         for session in self.sessions:
             session.sendOpCode(opcode=OpCode.STOP)
 
-    def onPlayBackError(self) -> None:
-        xbmc.executebuiltin('PlayerControl(Stop)')
-        self.onPlayBackEnded()
-
     def onPlayBackSpeedChanged(self, speed: float) -> None:
+        if not self.owns_playback:
+            return
         self.playback_speed = speed
 
     def onPlayBackTimeChanged(self) -> None:
+        if not self.owns_playback:
+            return
         # getTime() raises "Kodi is not playing any media file" rather than
         # returning anything when the player has moved on. Kodi calls these
         # callbacks for everything it plays, not only what we cast, and with

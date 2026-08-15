@@ -103,27 +103,34 @@ class TestViewerLifecycle(ViewerTestCase):
         self.assertFalse(self.viewer.is_showing)
         self.assertEqual(self.closed, [True])
 
-    def test_close_only_acts_while_the_viewer_is_on_screen(self):
-        # Back is a global input action; firing it blind would hit whatever
-        # else happens to be focused.
-        self.viewer.show("https://e/p.jpg")
-        self.off_screen()
-        xbmc.builtins_called.clear()
-
-        self.viewer.close()
-
-        self.assertEqual(xbmc.builtins_called, [])
-        self.assertFalse(self.viewer.is_showing)
-
     def test_close_dismisses_a_visible_viewer(self):
+        # ACTION_STOP, which is what Kodi binds to X - the key that actually
+        # exits the picture viewer. Back navigates instead.
         self.viewer.show("https://e/p.jpg")
         self.on_screen()
         xbmc.builtins_called.clear()
 
-        self.viewer.close()
+        self.assertTrue(self.viewer.close())
 
-        self.assertIn("Action(Back)", xbmc.builtins_called)
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
         self.assertFalse(self.viewer.is_showing)
+
+    def test_close_still_works_when_tracking_has_gone_stale(self):
+        # A sender's Stop must dismiss a picture that is genuinely on screen,
+        # even if we stopped believing one was.
+        self.on_screen()
+        self.viewer._showing = False
+
+        self.assertTrue(self.viewer.close())
+
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
+
+    def test_close_is_a_no_op_with_nothing_showing(self):
+        self.off_screen()
+
+        self.assertFalse(self.viewer.close())
+
+        self.assertEqual(xbmc.builtins_called, [])
 
     def test_showing_a_second_image_swaps_in_place(self):
         # Closing and reopening drops to the UI behind for a frame, which
@@ -187,6 +194,18 @@ class TestPlaybackReporting(unittest.TestCase):
 
         self.assertIn("ShowPicture(https://e/p.jpg|Referer=https%3A%2F%2Fe%2F)",
                       xbmc.builtins_called)
+
+    def test_sender_stop_dismisses_the_picture_and_reports_idle(self):
+        main.handle_play(None, PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        xbmcgui.current_window_id = 12007
+        xbmc.builtins_called.clear()
+        self.session.playback_updates.clear()
+
+        main.handle_stop(None)
+
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
+        self.assertEqual(self.session.playback_updates[-1].state, PlayBackState.IDLE)
+        self.assertFalse(main.image_viewer.is_showing)
 
     def test_an_image_play_never_reaches_the_video_player(self):
         # This is the whole point: the video player renders a picture for a

@@ -641,6 +641,63 @@ class TestImageCache(CacheTestCase):
         self.assertIsNone(image_cache.extension_for(b""))
 
 
+class TestUnwritableCache(CacheTestCase):
+    """A filesystem that cannot be written to must not stop pictures showing.
+
+    Raspberry Pi SD cards fail read-only, and a LibreELEC storage partition
+    can fill up. Either turns every cache write into an OSError, and none of
+    that is a reason for a photo not to appear: the URL still goes to Kodi,
+    which is what the add-on did before any of this existed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        if getattr(os, "geteuid", lambda: 1)() == 0:
+            # Root writes to a read-only directory regardless, so there would
+            # be nothing to test. Some CI images run as root.
+            self.skipTest("running as root")
+        self.readonly = tempfile.mkdtemp()
+        os.chmod(self.readonly, 0o500)
+        xbmcvfs.temp_dir = self.readonly
+        xbmc.builtins_called.clear()
+        main.sessions.clear()
+        main.sessions.append(FakeSession())
+        self.previous_player, main.player = main.player, FakePlayer()
+        main.playlist = None
+        main.cancel_pending_image()
+
+    def tearDown(self):
+        os.chmod(self.readonly, 0o700)
+        shutil.rmtree(self.readonly, ignore_errors=True)
+        main.sessions.clear()
+        main.image_viewer.close()
+        main.player = self.previous_player
+        main.cancel_pending_image()
+        super().tearDown()
+
+    def test_fetching_gives_up_instead_of_raising(self):
+        xbmc.messages.clear()
+
+        self.assertIsNone(image_cache.fetch(self.origin + "/p.png"))
+
+        # And says so, rather than looking like a picture nobody asked for.
+        self.assertTrue([level for level, message in xbmc.messages
+                         if "Could not cache" in message and level >= xbmc.LOGWARNING])
+
+    def test_the_picture_is_still_shown_straight_from_its_url(self):
+        url = self.origin + "/p.png"
+
+        main.handle_play(None, PlayMessage(container="image/png", url=url))
+
+        self.assertTrue(wait_for(
+            lambda: f"ShowPicture({url})" in xbmc.builtins_called))
+
+    def test_pruning_and_clearing_survive_it(self):
+        # Both run at start-up, before anything has been cast.
+        image_cache.prune()
+        image_cache.clear()
+
+
 class TestPreloading(CacheTestCase):
     """Downloading a picture before it goes on screen."""
 

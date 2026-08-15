@@ -102,7 +102,20 @@ class ImageViewer:
             self._on_closed()
 
     def _on_screen(self) -> bool:
+        """Whether Kodi's picture viewer is currently up.
+
+        Checks the dialog id as well as the window id. CGUIWindowSlideShow
+        derives from CGUIDialog despite its name and its 12xxx id, so it is
+        the *dialog* that reports 12007 and getCurrentWindowId() returns
+        whatever is underneath. Asking only the window meant this was always
+        False: the poll then decided the viewer had failed to open, told
+        senders playback was idle five seconds in, and left close() with
+        nothing to act on when a sender asked to stop.
+        """
         try:
-            return xbmcgui.getCurrentWindowId() == WINDOW_SLIDESHOW
+            return WINDOW_SLIDESHOW in (
+                xbmcgui.getCurrentWindowId(),
+                xbmcgui.getCurrentWindowDialogId(),
+            )
         except Exception:
             return False

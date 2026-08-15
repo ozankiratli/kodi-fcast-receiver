@@ -38,7 +38,12 @@ class ImageViewer:
         return self._showing
 
     def show(self, url: str) -> None:
-        self.close()
+        # Deliberately no close() first. ShowPicture delivers
+        # GUI_MSG_SHOW_PICTURE straight to the slideshow window, so calling it
+        # again while the viewer is open swaps the picture in place. Closing
+        # and reopening drops back to the UI behind for a frame, which is what
+        # made changing image to image flash dark.
+        already_open = self._showing and self._on_screen()
 
         log(f"Showing image {url}")
         # Kodi's own picture viewer, so scaling, rotation and the background
@@ -46,8 +51,9 @@ class ImageViewer:
         xbmc.executebuiltin(f'ShowPicture({url})')
 
         self._showing = True
-        self._confirmed = False
-        self._opened_at = time.time()
+        if not already_open:
+            self._confirmed = False
+            self._opened_at = time.time()
 
     def close(self) -> None:
         if not self._showing:

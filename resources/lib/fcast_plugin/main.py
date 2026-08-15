@@ -358,7 +358,7 @@ def main():
     s.settimeout(FCAST_TIMEOUT / 1000)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    player = FCastPlayer(sessions)
+    player = FCastPlayer(sessions, get_play_data=get_current_play_data)
     player_thread = Thread(target=check_player)
     player_thread.start()
 

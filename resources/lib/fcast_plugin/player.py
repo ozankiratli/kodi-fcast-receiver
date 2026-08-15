@@ -1,6 +1,7 @@
 import xbmc
 
-from .FCastSession import FCastSession, PlayBackUpdateMessage, PlayBackState, PlayMessage, PlaybackErrorMessage, OpCode
+from .FCastSession import (FCastSession, PlayBackUpdateMessage, PlayBackState, PlayMessage,
+                           PlaybackErrorMessage, EventType, OpCode, media_item_from_play_message)
 from .util import log
 
 from typing import List
@@ -11,14 +12,18 @@ class FCastPlayer(xbmc.Player):
     is_paused: bool = False
     # Used to perform time updates
     prev_time: int = -1
+    get_play_data = None
     # Fallback only. main assigns the sender's PlayMessage.time to the instance
     # before every cast, which shadows this. It matters because Kodi calls our
     # callbacks for anything it plays, including playback we did not start, and
     # onAVStarted would otherwise raise AttributeError.
     start_time: float = 0.0
 
-    def __init__(self, sessions: List[FCastSession]):
+    def __init__(self, sessions: List[FCastSession], get_play_data=None):
         self.sessions = sessions
+        # Supplies the PlayMessage currently on screen, for the item field of
+        # media events. Set by main, which owns that state.
+        self.get_play_data = get_play_data
         super().__init__()
 
     def doPause(self) -> None:
@@ -67,10 +72,9 @@ class FCastPlayer(xbmc.Player):
         self.is_paused = False
 
     def onPlayBackEnded(self) -> None:
-        # The item played to its end on its own. This is where a playlist
-        # advances to the next item.
+        # The item played to its end on its own.
         # xbmc.executebuiltin('PlayerControl(Stop)')
-        self.report_idle()
+        self.report_media_item_end()
 
     def onPlayBackError(self) -> None:
         # xbmc.executebuiltin('PlayerControl(Stop)')
@@ -78,7 +82,34 @@ class FCastPlayer(xbmc.Player):
             session.send_playback_error(PlaybackErrorMessage("Playback failed"))
         self.report_idle()
 
-    def report_idle(self) -> None:
+    def report_media_item_end(self) -> None:
+        """Signal that the current item finished playing on its own.
+
+        Senders drive their own queue from this: Grayjay answers a
+        MediaItemEnd event with the Play message for the next video. The
+        official receiver sends *only* the event here, with no preceding
+        PlaybackUpdate(Idle) - a sender that is told the receiver went idle
+        stands its queue down and never acts on the event that follows.
+
+        So Idle is reserved for senders that cannot receive the event at all.
+        """
+        self.is_paused = False
+        item = media_item_from_play_message(
+            self.get_play_data() if self.get_play_data else None,
+            time=max(self.prev_time, 0),
+        )
+
+        unreached = []
+        for session in list(self.sessions):
+            if not session.send_media_event(EventType.MEDIA_ITEM_END, item):
+                unreached.append(session)
+
+        if unreached:
+            self.report_idle(sessions=unreached)
+        else:
+            self.prev_time = -1
+
+    def report_idle(self, sessions=None) -> None:
         """Tell every sender that playback is over.
 
         Idle is the only state available for this: FCast defines just Idle,
@@ -96,7 +127,7 @@ class FCastPlayer(xbmc.Player):
             PlayBackState.IDLE,
             speed=self.playback_speed,
         )
-        for session in list(self.sessions):
+        for session in list(self.sessions if sessions is None else sessions):
             session.send_playback_update(message)
         self.prev_time = -1
 

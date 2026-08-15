@@ -73,14 +73,19 @@ image_viewer = ImageViewer(on_closed=lambda: on_image_closed(),
                            on_expired=lambda: on_image_expired())
 
 def get_current_play_data() -> Optional[PlayMessage]:
-    """What is playing right now, or None if nothing is.
+    """What is on screen right now, or None if nothing is.
 
     For the Initial handshake, where a sender connecting mid-playback needs to
-    know what is on screen. Gated on the player rather than cleared on stop,
-    so it cannot go stale if playback ends by a route that does not run
-    through us.
+    know what is showing. Gated on the player rather than cleared on stop, so
+    it cannot go stale if playback ends by a route that does not run through
+    us - and on the viewer as well as the player, because a picture never
+    reaches the player at all. Asking only the player meant every PlayUpdate
+    sent while a picture was up carried nothing, and a sender connecting to a
+    receiver with a photo on screen was told it was idle.
     """
     if player and player.isPlaying():
+        return current_play_message
+    if image_viewer.is_showing:
         return current_play_message
     return None
 

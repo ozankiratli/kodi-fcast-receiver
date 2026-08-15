@@ -87,7 +87,7 @@ def check_player():
     monitor = xbmc.Monitor()
     ticks = 0
     while not monitor.abortRequested():
-        if player and player.isPlaying():
+        if player and player.owns_playback and player.isPlaying():
             try:
                 # Update the current time if it has changed
                 if int(player.getTime()) != player.prev_time:
@@ -367,6 +367,8 @@ def play_message(message = None):
                     xbmc.sleep(100)
                     timeout -= 1
             player.start_time = start_time
+            # From here the callbacks Kodi sends us are about our own cast.
+            player.owns_playback = True
             player.play(item=url, listitem=play_item)
             # Every other connected sender needs to know what this one started.
             broadcast_play_update()

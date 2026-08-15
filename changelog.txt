@@ -1,3 +1,22 @@
+v0.2.2-beta (2026-08-15)
+- Fixed the add-on interrupting playback it did not start. Kodi delivers playback callbacks
+  for everything it plays, and the add-on answered each one by issuing a stop. With gapless
+  audio the callback for a finished track arrives while the next one is already playing, so
+  the stop killed the track that had just started, cutting an album to a few seconds a song
+- The add-on now only acts on playback it started itself. Casting is unchanged; local music
+  and video are left alone entirely, including the playback position updates that were being
+  sent to connected senders for media nobody had cast
+
+v0.2.1-beta (2026-08-15)
+- Fixed a crash whenever Kodi played media the add-on did not start. The add-on receives
+  playback callbacks for everything Kodi plays, not only what was cast to it, and raised
+  AttributeError on every one of them
+- Fixed a second crash in the same path: Kodi raises "Kodi is not playing any media file"
+  from getTime() once the player has moved on, which happens routinely with gapless audio
+  where the playback-started callback arrives after playback has already advanced
+- Both were reported from the field while playing local music, and neither affected casting
+  itself, but each logged an error and skipped a playback update
+
 v0.2.0-beta (2026-08-13)
 - Fixed packet reassembly: FCast messages split across TCP reads were corrupted, which
   desynchronised the stream and dropped the connection. Larger Play messages hit this almost

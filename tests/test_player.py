@@ -38,8 +38,67 @@ class FakeSession:
         return True
 
 
+def owned_player(*args, **kwargs):
+    """A player that believes the current playback is ours, as main sets it."""
+    player = FCastPlayer(*args, **kwargs)
+    player.owns_playback = True
+    return player
+
+
 def subscriber():
     return FakeSession(subscribed=[EventType.MEDIA_ITEM_END])
+
+
+class TestOwnership(unittest.TestCase):
+    """Only playback the add-on started is ours to act on.
+
+    Reported from the field: with the add-on enabled, a gapless FLAC album
+    played a few seconds per track. Kodi fires onPlayBackEnded for each track
+    while the next is already playing, the add-on answered with a stop, and
+    that killed the track Kodi had just started.
+    """
+
+    def test_callbacks_do_nothing_when_playback_is_not_ours(self):
+        session = subscriber()
+        player = FCastPlayer([session])  # not ours
+
+        player.onAVStarted()
+        player.onPlayBackTimeChanged()
+        player.onPlayBackEnded()
+        player.onPlayBackStopped()
+        player.onPlayBackError()
+
+        self.assertEqual(session.playback_updates, [])
+        self.assertEqual(session.media_events, [])
+        self.assertEqual(session.errors, [])
+
+    def test_a_gapless_album_is_left_alone(self):
+        player = FCastPlayer([])
+
+        for _ in range(6):
+            player.onAVStarted()
+            player.onPlayBackEnded()
+
+        self.assertEqual(player.seeked_to, [])
+
+    def test_ending_our_cast_releases_ownership(self):
+        session = subscriber()
+        player = owned_player([session])
+
+        player.onPlayBackEnded()
+
+        self.assertFalse(player.owns_playback)
+
+    def test_after_release_later_playback_is_ignored(self):
+        session = subscriber()
+        player = owned_player([session])
+        player.onPlayBackEnded()
+        session.media_events.clear()
+
+        player.onAVStarted()
+        player.onPlayBackEnded()
+
+        self.assertEqual(session.media_events, [])
 
 
 class TestStartTime(unittest.TestCase):
@@ -51,7 +110,7 @@ class TestStartTime(unittest.TestCase):
     """
 
     def test_seeks_to_the_position_the_sender_asked_for(self):
-        player = FCastPlayer([])
+        player = owned_player([])
         player.start_time = 12.5  # what main assigns from PlayMessage.time
 
         player.onAVStarted()
@@ -59,7 +118,7 @@ class TestStartTime(unittest.TestCase):
         self.assertEqual(player.seeked_to, [12.5])
 
     def test_position_is_consumed_once_not_reapplied(self):
-        player = FCastPlayer([])
+        player = owned_player([])
         player.start_time = 30.0
 
         player.onAVStarted()
@@ -70,14 +129,14 @@ class TestStartTime(unittest.TestCase):
     def test_playback_started_outside_fcast_does_not_raise(self):
         # The player receives callbacks for everything Kodi plays, not just
         # what we cast. Nothing has set start_time in that case.
-        player = FCastPlayer([])
+        player = owned_player([])
 
         player.onAVStarted()
 
         self.assertEqual(player.seeked_to, [])
 
     def test_zero_start_time_does_not_seek(self):
-        player = FCastPlayer([])
+        player = owned_player([])
         player.start_time = 0.0
 
         player.onAVStarted()
@@ -96,7 +155,7 @@ class TestForeignPlayback(unittest.TestCase):
 
     def test_time_change_survives_a_player_that_has_moved_on(self):
         session = FakeSession()
-        player = FCastPlayer([session])
+        player = owned_player([session])
 
         def gone():
             raise RuntimeError("Kodi is not playing any media file")
@@ -109,7 +168,7 @@ class TestForeignPlayback(unittest.TestCase):
 
     def test_av_started_survives_a_player_that_has_moved_on(self):
         session = FakeSession()
-        player = FCastPlayer([session])
+        player = owned_player([session])
         player.start_time = 30.0
 
         def gone(*args):
@@ -124,7 +183,7 @@ class TestForeignPlayback(unittest.TestCase):
 
     def test_duration_failing_is_also_survivable(self):
         session = FakeSession()
-        player = FCastPlayer([session])
+        player = owned_player([session])
 
         def gone():
             raise RuntimeError("Kodi is not playing any media file")
@@ -149,7 +208,7 @@ class TestMediaItemEnd(unittest.TestCase):
                           metadata={"title": "Episode 1", "type": 0})
 
     def player_with(self, sessions):
-        return FCastPlayer(sessions, get_play_data=lambda: self.PLAYING)
+        return owned_player(sessions, get_play_data=lambda: self.PLAYING)
 
     def test_item_survives_the_player_having_stopped(self):
         """The provider must not be gated on isPlaying().
@@ -159,7 +218,7 @@ class TestMediaItemEnd(unittest.TestCase):
         which tells a sender nothing about which queue entry finished.
         """
         session = subscriber()
-        player = FCastPlayer([session], get_play_data=lambda: self.PLAYING)
+        player = owned_player([session], get_play_data=lambda: self.PLAYING)
         player.playing = False  # the player has already torn down
 
         player.onPlayBackEnded()
@@ -196,7 +255,7 @@ class TestMediaItemEnd(unittest.TestCase):
     def test_inline_manifest_is_not_echoed_in_the_event(self):
         # content can be tens of KB; the packet ceiling is 32KB.
         session = subscriber()
-        player = FCastPlayer([session], get_play_data=lambda: PlayMessage(
+        player = owned_player([session], get_play_data=lambda: PlayMessage(
             container="application/dash+xml", content="<MPD>" + "x" * 40000))
 
         player.onPlayBackEnded()
@@ -265,7 +324,7 @@ class TestDeliberateStop(unittest.TestCase):
 
     def test_stopped_reports_idle_even_to_subscribers(self):
         session = subscriber()
-        player = FCastPlayer([session])
+        player = owned_player([session])
 
         player.onPlayBackStopped()
 
@@ -274,7 +333,7 @@ class TestDeliberateStop(unittest.TestCase):
 
     def test_error_reports_a_playback_error_then_idle(self):
         session = subscriber()
-        player = FCastPlayer([session])
+        player = owned_player([session])
 
         player.onPlayBackError()
 
@@ -287,7 +346,7 @@ class TestPlaybackUpdates(unittest.TestCase):
 
     def test_start_reports_position_to_every_session(self):
         sessions = [FakeSession(), FakeSession()]
-        player = FCastPlayer(sessions)
+        player = owned_player(sessions)
         player.start_time = 8.0
         player.total_time = 120.0
 

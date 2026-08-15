@@ -211,9 +211,14 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
     if player and player.isPlaying():
         xbmc.executebuiltin('PlayerControl(Stop)')
 
+    url = message.url
+    if headers:
+        # Same convention Kodi uses for media URLs.
+        url = f'{url}|{headers}'
+
     current_play_message = message
     notify('Showing image ...')
-    image_viewer.show(message.url, message.headers)
+    image_viewer.show(url)
     broadcast_playback_state(PlayBackState.PLAYING)
     broadcast_play_update()
 

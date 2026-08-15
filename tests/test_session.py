@@ -224,7 +224,8 @@ class TestInitialHandshake(unittest.TestCase):
                 self.assertTrue(body["displayName"].startswith("Kodi - "))
                 self.assertEqual(body["appName"], "FCast Receiver")
                 self.assertEqual(body["appVersion"], "0.0.0-test")
-                self.assertIsNone(body["playData"])
+                # Unset fields are omitted, not sent as explicit nulls.
+                self.assertNotIn("playData", body)
 
     def test_initial_is_not_repeated(self):
         with mock.patch.object(session_module, "FCAST_VERSION", 3):
@@ -256,7 +257,7 @@ class TestInitialHandshake(unittest.TestCase):
 
                 sent = harness.sent()
                 self.assertLess(len(sent), MAXIMUM_PACKET_LENGTH)
-                self.assertIsNone(decode_packets(sent)[0][1]["playData"]["content"])
+                self.assertNotIn("content", decode_packets(sent)[0][1]["playData"])
 
 
 class TestPlayUpdate(unittest.TestCase):

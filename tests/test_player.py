@@ -100,6 +100,23 @@ class TestMediaItemEnd(unittest.TestCase):
     def player_with(self, sessions):
         return FCastPlayer(sessions, get_play_data=lambda: self.PLAYING)
 
+    def test_item_survives_the_player_having_stopped(self):
+        """The provider must not be gated on isPlaying().
+
+        onPlayBackEnded fires once playback is already over, so a provider
+        that checks isPlaying() returns None and the event ships item: null -
+        which tells a sender nothing about which queue entry finished.
+        """
+        session = subscriber()
+        player = FCastPlayer([session], get_play_data=lambda: self.PLAYING)
+        player.playing = False  # the player has already torn down
+
+        player.onPlayBackEnded()
+
+        _, item = session.media_events[0]
+        self.assertIsNotNone(item)
+        self.assertEqual(item.url, "https://e/v.mpd")
+
     def test_subscriber_gets_the_event_and_no_idle(self):
         session = subscriber()
         player = self.player_with([session])

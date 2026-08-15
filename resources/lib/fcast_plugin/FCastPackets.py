@@ -105,6 +105,80 @@ class SetPlaylistItemMessage:
     def __init__(self, itemIndex: int) -> None:
         self.itemIndex = itemIndex
 
+class EventType(int, Enum):
+    MEDIA_ITEM_START = 0
+    MEDIA_ITEM_END = 1
+    MEDIA_ITEM_CHANGE = 2
+    KEY_DOWN = 3
+    KEY_UP = 4
+
+class MediaItem:
+    """One entry of playable content, as carried inside an event."""
+
+    def __init__(self,
+        container: str,
+        url: Optional[str] = None,
+        content: Optional[str] = None,
+        time: Optional[float] = None,
+        volume: Optional[float] = None,
+        speed: Optional[float] = None,
+        cache: Optional[bool] = None,
+        showDuration: Optional[float] = None,
+        headers = None,
+        metadata = None
+    ) -> None:
+        self.container = container
+        self.url = url
+        self.content = content
+        self.time = time
+        self.volume = volume
+        self.speed = speed
+        self.cache = cache
+        self.showDuration = showDuration
+        self.headers = headers
+        self.metadata = metadata
+
+class MediaItemEvent:
+    def __init__(self, type: int, item: Optional[MediaItem] = None) -> None:
+        self.type = type
+        self.item = item
+
+class EventMessage:
+    def __init__(self, event, generationTime: Optional[int] = None) -> None:
+        self.event = event
+        self.generationTime = generationTime if generationTime else int(datetime.now(timezone.utc).timestamp() * 1000)
+
+class SubscribeEventMessage:
+    def __init__(self, event = None) -> None:
+        self.event = event
+
+class UnsubscribeEventMessage:
+    def __init__(self, event = None) -> None:
+        self.event = event
+
+def media_item_from_play_message(
+    message: Optional[PlayMessage], time: Optional[float] = None
+) -> Optional[MediaItem]:
+    """Describe what was playing, for the item field of a media event.
+
+    Senders match this against their own queue entry to work out which item
+    finished, so it mirrors the fields they sent us. `content` is left out for
+    the same reason it is stripped from PlayUpdate: an inline manifest would
+    blow the 32KB packet ceiling.
+    """
+    if message is None:
+        return None
+
+    return MediaItem(
+        container=message.container,
+        url=message.url,
+        time=time if time is not None else message.time,
+        volume=message.volume,
+        speed=message.speed,
+        headers=message.headers,
+        metadata=message.metadata,
+    )
+
 def summarize_play_message(message: Optional[PlayMessage]) -> Optional[PlayMessage]:
     """Copy a PlayMessage for echoing back to senders, without its content.
 

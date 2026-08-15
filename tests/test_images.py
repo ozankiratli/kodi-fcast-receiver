@@ -125,13 +125,33 @@ class TestViewerLifecycle(ViewerTestCase):
         self.assertIn("Action(Back)", xbmc.builtins_called)
         self.assertFalse(self.viewer.is_showing)
 
-    def test_showing_a_second_image_replaces_the_first(self):
+    def test_showing_a_second_image_swaps_in_place(self):
+        # Closing and reopening drops to the UI behind for a frame, which
+        # reads as a dark flash between images.
         self.viewer.show("https://e/one.jpg")
         self.on_screen()
+        self.viewer.poll()
+        xbmc.builtins_called.clear()
+
         self.viewer.show("https://e/two.jpg")
 
-        self.assertIn("ShowPicture(https://e/two.jpg)", xbmc.builtins_called)
+        self.assertEqual(xbmc.builtins_called, ["ShowPicture(https://e/two.jpg)"])
+        self.assertNotIn("Action(Back)", xbmc.builtins_called)
         self.assertTrue(self.viewer.is_showing)
+
+    def test_swapping_in_place_keeps_the_viewer_confirmed_on_screen(self):
+        # Resetting the open-timeout state on a swap would make the next poll
+        # think the viewer was still opening.
+        self.viewer.show("https://e/one.jpg")
+        self.on_screen()
+        self.viewer.poll()
+
+        self.viewer.show("https://e/two.jpg")
+        self.off_screen()
+        self.viewer.poll()
+
+        self.assertFalse(self.viewer.is_showing)
+        self.assertEqual(self.closed, [True])
 
     def test_poll_does_nothing_when_no_image_was_shown(self):
         self.viewer.poll()

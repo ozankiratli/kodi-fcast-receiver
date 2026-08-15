@@ -15,6 +15,7 @@ from .FCastHTTPServer import FCastHTTPServer
 from .player import FCastPlayer
 from .image_viewer import ImageViewer
 from .playlist import Playlist, is_playlist, parse_playlist
+from . import settings
 from .util import log, notify, debounce
 from .mdns import register as mdns_register, unregister as mdns_unregister
 
@@ -52,8 +53,9 @@ last_volume: Optional[float] = None
 playlist: Optional[Playlist] = None
 
 # Pictures bypass the player entirely, so they get their own viewer. The
-# lambda defers resolving the callback, which is defined further down.
-image_viewer = ImageViewer(on_closed=lambda: on_image_closed())
+# lambdas defer resolving the callbacks, which are defined further down.
+image_viewer = ImageViewer(on_closed=lambda: on_image_closed(),
+                           on_expired=lambda: on_image_expired())
 
 def get_current_play_data() -> Optional[PlayMessage]:
     """What is playing right now, or None if nothing is.
@@ -209,6 +211,48 @@ def on_image_closed() -> None:
     log("Image viewer closed")
     broadcast_playback_state(PlayBackState.IDLE)
 
+def image_show_duration() -> float:
+    """How long the picture about to be shown should stay up, in seconds.
+
+    Only a picture that came from a playlist gets a countdown. One cast on its
+    own stays until a sender stops it or someone closes it from the Kodi UI:
+    there is nothing to move on to, and FCast's own receiver treats it the
+    same way - it starts the showDuration timer only for playlist items.
+
+    Within a playlist the sender's showDuration wins, since it knows what it
+    queued, unless the user has said their own duration should override it.
+    A sender that names no duration gets the user's, which is what stops a
+    picture holding up the rest of the queue indefinitely.
+    """
+    if playlist is None:
+        return 0.0
+
+    item = playlist.current
+    sent = float(item.showDuration or 0.0) if item is not None else 0.0
+    if sent > 0 and not settings.image_duration_overrides_sender():
+        return sent
+    return settings.image_duration()
+
+def on_image_expired() -> None:
+    """The picture has been up for its full duration, so the queue moves on."""
+    log("Picture duration elapsed")
+
+    # The same event a video sends when it plays out, and for the same reason:
+    # senders match the item against their own queue entry.
+    item = media_item_from_play_message(get_last_play_data())
+    for session in list(sessions):
+        session.send_media_event(EventType.MEDIA_ITEM_END, item)
+
+    if advance_playlist():
+        return
+
+    # Unlike the video path, Idle goes to every sender here rather than only
+    # the ones the event could not reach. The queue that has just run out is
+    # ours, so there is none left on the sender for Idle to stand down, and
+    # the viewer is about to be closed - anything but Idle would be a lie.
+    image_viewer.close()
+    broadcast_playback_state(PlayBackState.IDLE)
+
 def handle_image(message: PlayMessage, headers: str = "") -> None:
     """Put a still picture on screen and report it as playing.
 
@@ -227,7 +271,7 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
 
     current_play_message = message
     notify('Showing image ...')
-    image_viewer.show(url)
+    image_viewer.show(url, duration=image_show_duration())
     broadcast_playback_state(PlayBackState.PLAYING)
     broadcast_play_update()
 
@@ -421,12 +465,21 @@ def handle_stop(session: FCastSession, message = None):
 def handle_pause(session: FCastPlayer, message = None):
     global player
     log(f"Client request pause")
+    # A picture answers this itself, by holding its countdown. Handing it to
+    # the player instead would pause whatever Kodi happened to be playing,
+    # which while a picture is up is not ours.
+    if image_viewer.pause():
+        broadcast_playback_state(PlayBackState.PAUSED)
+        return
     if player:
         player.doPause()
 
 def handle_resume(session: FCastPlayer, message = None):
     global player
     log(f"Client request resume")
+    if image_viewer.resume():
+        broadcast_playback_state(PlayBackState.PLAYING)
+        return
     if player:
         player.doResume()
 

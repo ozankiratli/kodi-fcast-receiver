@@ -1,5 +1,10 @@
-"""Still pictures: classification, and the viewer's lifecycle."""
+"""Still pictures: classification, pre-fetching, and the viewer's lifecycle."""
 
+import http.server
+import os
+import shutil
+import tempfile
+import threading
 import unittest
 
 from context import fcast_plugin  # noqa: F401  (sets up sys.path)
@@ -9,6 +14,42 @@ from fcast_plugin.FCastPackets import PlayBackState, PlayMessage
 
 import xbmc
 import xbmcgui
+
+PNG = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+       b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01'
+       b'\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
+
+
+class ImageServer(http.server.BaseHTTPRequestHandler):
+    """Serves one picture and records the headers it was asked with."""
+
+    received_headers = {}
+
+    def do_GET(self):
+        type(self).received_headers = dict(self.headers)
+        if self.path.startswith("/missing"):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(PNG)))
+        self.end_headers()
+        self.wfile.write(PNG)
+
+    def log_message(self, *args):
+        pass
+
+
+class FakePlayer:
+    """Enough of FCastPlayer for handle_play to reach its video branch."""
+
+    start_time = 0.0
+
+    def isPlaying(self):
+        return False
+
+    def play(self, *args, **kwargs):
+        pass
 
 
 class FakeSession:
@@ -51,11 +92,39 @@ class TestClassification(unittest.TestCase):
 
 
 class ViewerTestCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.httpd = http.server.HTTPServer(("127.0.0.1", 0), ImageServer)
+        cls.origin = "http://127.0.0.1:%d" % cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
     def setUp(self):
         xbmc.builtins_called.clear()
         xbmcgui.current_window_id = 10000
+        ImageServer.received_headers = {}
         self.closed = []
-        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True))
+        self.cache = tempfile.mkdtemp()
+        self.viewer = ImageViewer(on_closed=lambda: self.closed.append(True),
+                                  cache_dir=self.cache)
+
+    def tearDown(self):
+        shutil.rmtree(self.cache, ignore_errors=True)
+
+    def show_now(self, url, headers=None):
+        """show() pre-fetches on a worker thread; wait for it to land."""
+        self.viewer.show(url, headers)
+        self.viewer._worker.join(timeout=10)
+
+    def shown(self):
+        return [c for c in xbmc.builtins_called if c.startswith("ShowPicture(")]
+
+    def cached_files(self):
+        return os.listdir(self.cache)
 
     def on_screen(self):
         xbmcgui.current_window_id = WINDOW_SLIDESHOW
@@ -64,16 +133,70 @@ class ViewerTestCase(unittest.TestCase):
         xbmcgui.current_window_id = 10000
 
 
-class TestViewerLifecycle(ViewerTestCase):
+class TestPreFetching(ViewerTestCase):
+    """Pictures are fetched locally before Kodi is asked to show them.
 
-    def test_show_opens_kodi_picture_viewer(self):
-        self.viewer.show("https://e/p.jpg")
+    Kodi blanks the viewer while it loads, so pointing it at a remote URL
+    means the screen is dark for the whole download. Fetching here keeps
+    whatever is on screen up until the replacement is ready.
+    """
 
-        self.assertIn("ShowPicture(https://e/p.jpg)", xbmc.builtins_called)
+    def test_kodi_is_given_a_local_file_not_the_remote_url(self):
+        self.show_now(self.origin + "/photo.png")
+
+        self.assertEqual(len(self.shown()), 1)
+        self.assertIn(self.cache, self.shown()[0])
+        self.assertNotIn(self.origin, self.shown()[0])
+        self.assertEqual(len(self.cached_files()), 1)
+
+    def test_the_fetched_file_is_the_picture(self):
+        self.show_now(self.origin + "/photo.png")
+
+        path = os.path.join(self.cache, self.cached_files()[0])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), PNG)
+
+    def test_headers_are_sent_on_the_request(self):
+        self.show_now(self.origin + "/photo.png",
+                      {"Referer": "https://example/", "User-Agent": "CastLab"})
+
+        self.assertEqual(ImageServer.received_headers.get("Referer"), "https://example/")
+        self.assertEqual(ImageServer.received_headers.get("User-Agent"), "CastLab")
+
+    def test_extension_comes_from_the_content_type(self):
+        self.show_now(self.origin + "/photo-without-extension")
+
+        # Kodi picks its decoder from the extension.
+        self.assertTrue(self.cached_files()[0].endswith(".png"))
+
+    def test_a_failed_fetch_falls_back_to_letting_kodi_load_the_url(self):
+        url = self.origin + "/missing.png"
+
+        self.show_now(url)
+
+        self.assertEqual(self.shown(), ["ShowPicture(%s)" % url])
         self.assertTrue(self.viewer.is_showing)
 
+    def test_the_previous_file_is_cleaned_up_after_the_swap(self):
+        self.show_now(self.origin + "/one.png")
+        self.on_screen()
+        self.show_now(self.origin + "/two.png")
+
+        self.assertEqual(len(self.cached_files()), 1)
+
+    def test_closing_removes_the_cached_file(self):
+        self.show_now(self.origin + "/photo.png")
+        self.on_screen()
+
+        self.viewer.close()
+
+        self.assertEqual(self.cached_files(), [])
+
+
+class TestViewerLifecycle(ViewerTestCase):
+
     def test_dismissal_from_the_ui_is_noticed(self):
-        self.viewer.show("https://e/p.jpg")
+        self.show_now(self.origin + "/p.png")
         self.on_screen()
         self.viewer.poll()
         self.assertTrue(self.viewer.is_showing)
@@ -86,7 +209,7 @@ class TestViewerLifecycle(ViewerTestCase):
 
     def test_slow_opening_is_not_mistaken_for_dismissal(self):
         # ShowPicture is asynchronous, so the window is not up immediately.
-        self.viewer.show("https://e/p.jpg")
+        self.show_now(self.origin + "/p.png")
 
         for _ in range(5):
             self.viewer.poll()
@@ -95,7 +218,7 @@ class TestViewerLifecycle(ViewerTestCase):
         self.assertEqual(self.closed, [])
 
     def test_a_viewer_that_never_opens_gives_up(self):
-        self.viewer.show("https://e/p.jpg")
+        self.show_now(self.origin + "/p.png")
         self.viewer._opened_at -= 99  # past the open timeout
 
         self.viewer.poll()
@@ -106,7 +229,7 @@ class TestViewerLifecycle(ViewerTestCase):
     def test_close_dismisses_a_visible_viewer(self):
         # ACTION_STOP, which is what Kodi binds to X - the key that actually
         # exits the picture viewer. Back navigates instead.
-        self.viewer.show("https://e/p.jpg")
+        self.show_now(self.origin + "/p.png")
         self.on_screen()
         xbmc.builtins_called.clear()
 
@@ -135,25 +258,25 @@ class TestViewerLifecycle(ViewerTestCase):
     def test_showing_a_second_image_swaps_in_place(self):
         # Closing and reopening drops to the UI behind for a frame, which
         # reads as a dark flash between images.
-        self.viewer.show("https://e/one.jpg")
+        self.show_now(self.origin + "/one.png")
         self.on_screen()
         self.viewer.poll()
         xbmc.builtins_called.clear()
 
-        self.viewer.show("https://e/two.jpg")
+        self.show_now(self.origin + "/two.png")
 
-        self.assertEqual(xbmc.builtins_called, ["ShowPicture(https://e/two.jpg)"])
-        self.assertNotIn("Action(Back)", xbmc.builtins_called)
+        self.assertNotIn("Action(Stop)", xbmc.builtins_called)
+        self.assertEqual(len(self.shown()), 1)
         self.assertTrue(self.viewer.is_showing)
 
     def test_swapping_in_place_keeps_the_viewer_confirmed_on_screen(self):
         # Resetting the open-timeout state on a swap would make the next poll
         # think the viewer was still opening.
-        self.viewer.show("https://e/one.jpg")
+        self.show_now(self.origin + "/one.png")
         self.on_screen()
         self.viewer.poll()
 
-        self.viewer.show("https://e/two.jpg")
+        self.show_now(self.origin + "/two.png")
         self.off_screen()
         self.viewer.poll()
 
@@ -164,6 +287,14 @@ class TestViewerLifecycle(ViewerTestCase):
         self.viewer.poll()
         self.assertEqual(self.closed, [])
 
+    def test_close_during_a_fetch_cancels_it(self):
+        self.viewer.show(self.origin + "/photo.png")
+        self.viewer.close()
+        self.viewer._worker.join(timeout=10)
+
+        self.assertFalse(self.viewer.is_showing)
+        self.assertEqual(self.shown(), [])
+
 
 class TestPlaybackReporting(unittest.TestCase):
     def setUp(self):
@@ -172,13 +303,21 @@ class TestPlaybackReporting(unittest.TestCase):
         main.sessions.clear()
         self.session = FakeSession()
         main.sessions.append(self.session)
+        self.previous_player, main.player = main.player, FakePlayer()
 
     def tearDown(self):
         main.sessions.clear()
         main.image_viewer.close()
+        main.player = self.previous_player
+
+    def show(self, message):
+        main.handle_play(None, message)
+        worker = main.image_viewer._worker
+        if worker:
+            worker.join(timeout=10)
 
     def test_showing_an_image_reports_playing(self):
-        main.handle_image(PlayMessage(container="image/jpeg", url="https://e/p.jpg"), "")
+        main.handle_image(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
 
         self.assertEqual(self.session.playback_updates[0].state, PlayBackState.PLAYING)
 
@@ -187,17 +326,9 @@ class TestPlaybackReporting(unittest.TestCase):
 
         self.assertEqual(self.session.playback_updates[-1].state, PlayBackState.IDLE)
 
-    def test_headers_are_appended_to_the_url(self):
-        main.handle_image(
-            PlayMessage(container="image/jpeg", url="https://e/p.jpg"),
-            "Referer=https%3A%2F%2Fe%2F")
-
-        self.assertIn("ShowPicture(https://e/p.jpg|Referer=https%3A%2F%2Fe%2F)",
-                      xbmc.builtins_called)
-
     def test_sender_stop_dismisses_the_picture_and_reports_idle(self):
-        main.handle_play(None, PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
-        xbmcgui.current_window_id = 12007
+        self.show(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        xbmcgui.current_window_id = WINDOW_SLIDESHOW
         xbmc.builtins_called.clear()
         self.session.playback_updates.clear()
 
@@ -210,10 +341,22 @@ class TestPlaybackReporting(unittest.TestCase):
     def test_an_image_play_never_reaches_the_video_player(self):
         # This is the whole point: the video player renders a picture for a
         # few milliseconds and then closes.
-        main.handle_play(None, PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        self.show(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
 
         self.assertTrue(any(c.startswith("ShowPicture(") for c in xbmc.builtins_called))
         self.assertTrue(main.image_viewer.is_showing)
+
+    def test_starting_a_video_dismisses_a_picture(self):
+        # The picture viewer sits above the video window, so a picture left up
+        # hides the video completely.
+        self.show(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        xbmcgui.current_window_id = WINDOW_SLIDESHOW
+        xbmc.builtins_called.clear()
+
+        main.handle_play(None, PlayMessage(container="video/mp4", url="https://e/v.mp4"))
+
+        self.assertIn("Action(Stop)", xbmc.builtins_called)
+        self.assertFalse(main.image_viewer.is_showing)
 
 
 if __name__ == "__main__":

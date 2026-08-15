@@ -62,6 +62,11 @@ playlist: Optional[Playlist] = None
 image_requests = count(1)
 image_request: int = 0
 
+# The picture that is on screen or on its way to it, so a sender re-sending
+# the one already up does not make us tear the viewer down and rebuild it.
+image_url: Optional[str] = None
+image_pending: bool = False
+
 # Pictures bypass the player entirely, so they get their own viewer. The
 # lambdas defer resolving the callbacks, which are defined further down.
 image_viewer = ImageViewer(on_closed=lambda: on_image_closed(),
@@ -218,8 +223,11 @@ def broadcast_playback_state(state: PlayBackState, position: float = 0.0) -> Non
 
 def on_image_closed() -> None:
     """The picture viewer went away, so senders should stop showing it."""
+    global image_url
     log("Image viewer closed")
-    image_cache.clear()
+    # The file stays cached: closing the viewer is often followed by the same
+    # picture being cast again, and that should not mean downloading it again.
+    image_url = None
     broadcast_playback_state(PlayBackState.IDLE)
 
 def image_show_duration() -> float:
@@ -270,8 +278,10 @@ def cancel_pending_image() -> None:
     A download that lands after a video has started would put the picture
     viewer straight back over the top of it.
     """
-    global image_request
+    global image_request, image_url, image_pending
     image_request = next(image_requests)
+    image_url = None
+    image_pending = False
 
 def handle_image(message: PlayMessage, headers: str = "") -> None:
     """Put a still picture on screen and report it as playing.
@@ -279,7 +289,20 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
     There is no player to ask about state afterwards, so the Playing update
     goes out here and the matching Idle comes from on_image_closed.
     """
-    global current_play_message, image_request
+    global current_play_message, image_request, image_url, image_pending
+
+    if already_showing(message.url):
+        # Senders re-send the picture that is up, and acting on that would
+        # tear the viewer down and build it again for the same photo: a
+        # flash, a re-download, and Kodi's window sound, every time.
+        log("Already showing this picture, leaving it alone")
+        current_play_message = message
+        # It still counts as the item being played, so a queue holding the
+        # same photo twice running does not come to a halt on it.
+        image_viewer.restart_countdown(image_show_duration())
+        broadcast_playback_state(PlayBackState.PLAYING)
+        broadcast_play_update()
+        return
 
     if player and player.isPlaying():
         xbmc.executebuiltin('PlayerControl(Stop)')
@@ -293,12 +316,14 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
     notify('Showing image ...')
 
     image_request = next(image_requests)
+    image_url = message.url
     duration = image_show_duration()
 
     if settings.preload_images():
         # Off the connection thread: the sender has more to say to us than
         # this, and a photo takes as long as it takes.
         request = image_request
+        image_pending = True
         Thread(target=lambda: show_downloaded_image(request, message, url, duration),
                daemon=True).start()
     else:
@@ -307,22 +332,33 @@ def handle_image(message: PlayMessage, headers: str = "") -> None:
     broadcast_playback_state(PlayBackState.PLAYING)
     broadcast_play_update()
 
+def already_showing(url: Optional[str]) -> bool:
+    """Whether this picture is on screen already, or on its way there.
+
+    Not the same as "we showed it last": once the viewer has been closed the
+    same picture has to be shown again, which is what a sender asking for it
+    a second time means.
+    """
+    return bool(url) and url == image_url and (image_viewer.is_showing or image_pending)
+
 def show_downloaded_image(request: int, message: PlayMessage, url: str,
                           duration: float) -> None:
     """Fetch a picture, then show it - leaving the last one up until it lands."""
-    path = image_cache.fetch(message.url, message.headers, name=f'picture-{request}')
+    global image_pending
 
-    if request != image_request:
-        # Something else was cast while this was downloading, and it has the
-        # screen now.
-        log("Discarding a picture that arrived too late")
-        image_cache.remove(path)
-        return
+    try:
+        path = image_cache.fetch(message.url, message.headers)
 
-    image_viewer.show(path or url, duration=duration)
+        if request != image_request:
+            # Something else was cast while this was downloading, and it has
+            # the screen now. The file stays: it is worth having next time.
+            log("Discarding a picture that arrived too late")
+            return
 
-    # The one it replaced is no longer being drawn from.
-    image_cache.clear(keep=path)
+        image_viewer.show(path or url, duration=duration)
+    finally:
+        if request == image_request:
+            image_pending = False
 
 def handle_play(session: FCastSession, message = None):
     log(f"Client request play")
@@ -503,7 +539,6 @@ def handle_stop(session: FCastSession, message = None):
     log(f"Client request stop")
     playlist = None
     cancel_pending_image()
-    image_cache.clear()
     # Ask the viewer first: it reports whether there was a picture to
     # dismiss, so a stale is_showing cannot swallow the request.
     if image_viewer.close():
@@ -707,9 +742,9 @@ def main():
     http_server = FCastHTTPServer()
     http_server.start()
 
-    # Anything still in here is left over from a previous run that did not
-    # get to clean up after itself.
-    image_cache.clear()
+    # Pictures cached by a previous run are worth keeping - the same photos
+    # tend to be cast again - but not without a ceiling on them.
+    image_cache.prune()
 
     try:
         s.bind((FCAST_HOST, FCAST_PORT))
@@ -751,7 +786,6 @@ def main():
     s.close()
 
     http_server.stop()
-    image_cache.clear()
 
     notify("Server stopped")
     exit()

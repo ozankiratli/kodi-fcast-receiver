@@ -88,6 +88,25 @@ class ImageViewer:
             self._confirmed = False
             self._opened_at = time.time()
 
+    def restart_countdown(self, duration: float) -> None:
+        """Give the picture on screen its time again, without redrawing it.
+
+        For a sender that re-sends the picture already up: there is nothing
+        to redraw, but a playlist that holds the same photo twice in a row
+        would otherwise sit on it for good, with no countdown to move it on.
+        """
+        if not self._showing:
+            return
+
+        self._duration = max(0.0, float(duration or 0.0))
+        self._paused = False
+        self._remaining = 0.0
+        # If it is not on screen yet the poll arms this, exactly as it would
+        # for a picture that had just been asked for.
+        self._expires_at = (time.time() + self._duration
+                            if self._confirmed and self._duration else 0.0)
+        self._started = self._expires_at > 0.0
+
     def close(self) -> bool:
         """Dismiss the picture viewer. Returns True if there was one to dismiss.
 

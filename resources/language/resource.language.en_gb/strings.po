@@ -71,7 +71,7 @@ msgid "Download pictures before showing them"
 msgstr ""
 
 msgctxt "#32017"
-msgid "Keeps the picture already on screen up while the next one downloads, instead of going black for the wait. Turn this off if pictures fail to appear."
+msgid "Keeps the picture already on screen up while the next one downloads, instead of going black for the wait. Recently shown pictures are kept, so casting one again costs nothing. Turn this off if pictures fail to appear."
 msgstr ""
 
 msgctxt "#32018"

@@ -183,7 +183,7 @@ class ImageViewer:
             # Still opening, or it never opened at all.
             if time.time() - self._opened_at < OPEN_TIMEOUT:
                 return
-            log("Image viewer did not open")
+            log("Image viewer did not open", xbmc.LOGWARNING)
 
         self._showing = False
         self._confirmed = False

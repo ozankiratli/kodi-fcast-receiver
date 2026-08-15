@@ -18,7 +18,7 @@ from .image_viewer import ImageViewer
 from . import image_cache
 from .playlist import Playlist, is_playlist, parse_playlist
 from . import settings
-from .util import log, notify, debounce
+from .util import log, notify, debounce, addonversion
 from .mdns import register as mdns_register, unregister as mdns_unregister
 
 session_threads: List[Thread] = []
@@ -361,6 +361,10 @@ def show_downloaded_image(request: int, message: PlayMessage, url: str,
             return
 
         image_viewer.show(path or url, duration=duration)
+    except Exception as e:
+        # This runs on its own thread, where an escaping exception is only
+        # ever seen as a stack trace with nothing to attach it to.
+        log(f"Could not show {message.url}: {e}", xbmc.LOGERROR)
     finally:
         if request == image_request:
             image_pending = False
@@ -677,6 +681,12 @@ def connection_handler(conn: socket.socket, addr):
     global player, http_server
 
     monitor = xbmc.Monitor()
+    # Above debug level deliberately, along with the disconnect below and the
+    # listening line in main(). Everything else this add-on logs is LOGDEBUG,
+    # so with Kodi's debug logging off it said nothing whatsoever - including
+    # when something had gone wrong. These few lines are what a plain log
+    # needs to answer "is it running, and is anything talking to it".
+    log("Connection from %s" % addr[0], xbmc.LOGINFO)
     notify("Connection from %s" % addr[0])
 
     session = FCastSession(conn, get_play_data=get_current_play_data)
@@ -707,7 +717,7 @@ def connection_handler(conn: socket.socket, addr):
                 # A zero-length read on a non-blocking socket means the peer
                 # closed. Without this the thread spins until Kodi exits, and
                 # every reconnect leaks another one.
-                log("Client %s disconnected" % addr[0])
+                log("Client %s disconnected" % addr[0], xbmc.LOGINFO)
                 break
             session.process_bytes(buff)
         except BlockingIOError:
@@ -723,6 +733,7 @@ def connection_handler(conn: socket.socket, addr):
     if player:
         player.removeSession(session)
     session.close()
+    log("Connection closed from %s" % addr[0], xbmc.LOGINFO)
     notify("Connection closed from %s" % addr[0])
 
 def main():
@@ -764,6 +775,8 @@ def main():
     selector = selectors.DefaultSelector()
     selector.register(s, selectors.EVENT_READ, data=None)
 
+    log(f"version {addonversion} listening on port {FCAST_PORT}, "
+        f"FCast protocol v{FCAST_VERSION}", xbmc.LOGINFO)
     notify("Server listening on port %d" % FCAST_PORT, timeout=1000)
 
     monitor = xbmc.Monitor()
@@ -792,6 +805,7 @@ def main():
 
     http_server.stop()
 
+    log("Server stopped", xbmc.LOGINFO)
     notify("Server stopped")
     exit()
 

@@ -21,6 +21,7 @@ from typing import Optional
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import xbmc
 import xbmcvfs
 
 from .util import log
@@ -100,7 +101,7 @@ def touch(path: str) -> None:
         stamp = time.time_ns()
         os.utime(path, ns=(stamp, stamp))
     except OSError as e:
-        log(f"Could not touch {path}: {e}")
+        log(f"Could not touch {path}: {e}", xbmc.LOGWARNING)
 
 
 def cached(url: str) -> Optional[str]:
@@ -114,7 +115,7 @@ def cached(url: str) -> Optional[str]:
                     touch(path)
                     return path
     except OSError as e:
-        log(f"Could not look in the picture cache: {e}")
+        log(f"Could not look in the picture cache: {e}", xbmc.LOGWARNING)
     return None
 
 
@@ -137,7 +138,7 @@ def fetch(url: str, headers=None) -> Optional[str]:
             head = response.read(32)
             extension = extension_for(head)
             if extension is None:
-                log(f"Not caching {url}: {head[:8]!r} is not a picture we know")
+                log(f"Not caching {url}: {head[:8]!r} is not a picture we know", xbmc.LOGINFO)
                 return None
 
             # Downloaded under a part name and moved into place, so a
@@ -167,12 +168,12 @@ def fetch(url: str, headers=None) -> Optional[str]:
     except HTTPError as e:
         # An HTTPError is itself the response, holding the socket, so it has
         # to be closed rather than just logged.
-        log(f"Could not cache {url}: {e}")
+        log(f"Could not cache {url}: {e}", xbmc.LOGWARNING)
         e.close()
         remove(path)
         return None
     except Exception as e:
-        log(f"Could not cache {url}: {e}")
+        log(f"Could not cache {url}: {e}", xbmc.LOGWARNING)
         remove(path)
         return None
 
@@ -220,7 +221,7 @@ def prune(keep: Optional[str] = None) -> None:
             count -= 1
             total -= size
     except Exception as e:
-        log(f"Could not prune the picture cache: {e}")
+        log(f"Could not prune the picture cache: {e}", xbmc.LOGWARNING)
 
 
 def clear() -> None:
@@ -229,4 +230,4 @@ def clear() -> None:
         for _, _, entry in contents():
             remove(entry)
     except Exception as e:
-        log(f"Could not clear the picture cache: {e}")
+        log(f"Could not clear the picture cache: {e}", xbmc.LOGWARNING)

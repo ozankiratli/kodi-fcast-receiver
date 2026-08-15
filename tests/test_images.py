@@ -217,11 +217,18 @@ class TestViewerLifecycle(ViewerTestCase):
     def test_a_viewer_that_never_opens_gives_up(self):
         self.show_now(self.origin + "/p.png")
         self.viewer._opened_at -= 99  # past the open timeout
+        xbmc.messages.clear()
 
         self.viewer.poll()
 
         self.assertFalse(self.viewer.is_showing)
         self.assertEqual(self.closed, [True])
+        # Loud enough to survive Kodi's default log level: a picture that
+        # never appears is the fault most worth being able to see.
+        levels = [level for level, message in xbmc.messages
+                  if "did not open" in message]
+        self.assertTrue(all(level >= xbmc.LOGWARNING for level in levels))
+        self.assertTrue(levels)
 
     def test_close_dismisses_a_visible_viewer(self):
         # ACTION_STOP, which is what Kodi binds to X - the key that actually
@@ -604,6 +611,19 @@ class TestImageCache(CacheTestCase):
             image_cache.MAX_FILES = original
 
         self.assertTrue(os.path.exists(oldest))
+
+    def test_a_failed_download_is_logged_where_it_can_be_seen(self):
+        # Everything else this add-on logs is LOGDEBUG, which Kodi drops
+        # unless debug logging is on. A fallback nobody can see is one nobody
+        # can tell apart from working.
+        xbmc.messages.clear()
+
+        image_cache.fetch(self.origin + "/missing.png")
+
+        levels = [level for level, message in xbmc.messages
+                  if "Could not cache" in message]
+        self.assertTrue(levels, "the failure was not logged at all")
+        self.assertTrue(all(level >= xbmc.LOGWARNING for level in levels))
 
     def test_clearing_everything_leaves_nothing_behind(self):
         image_cache.fetch(self.origin + "/one.png")

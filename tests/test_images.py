@@ -512,8 +512,8 @@ class TestImageCache(CacheTestCase):
     def test_a_picture_is_saved_with_the_extension_its_bytes_call_for(self):
         # Kodi picks the image decoder from the extension, so a cached file
         # without the right one draws nothing at all - a black screen.
-        png = image_cache.fetch(self.origin + "/p", name="one")
-        jpeg = image_cache.fetch(self.origin + "/photo", name="two")
+        png = image_cache.fetch(self.origin + "/p")
+        jpeg = image_cache.fetch(self.origin + "/photo")
 
         self.assertTrue(png.endswith(".png"), png)
         self.assertTrue(jpeg.endswith(".jpg"), jpeg)
@@ -522,40 +522,73 @@ class TestImageCache(CacheTestCase):
 
     def test_the_extension_comes_from_the_bytes_not_the_url(self):
         # Senders hand out URLs with no extension, or the wrong one.
-        path = image_cache.fetch(self.origin + "/holiday.gif?size=large", name="p")
+        path = image_cache.fetch(self.origin + "/holiday.gif?size=large")
 
         self.assertTrue(path.endswith(".png"), path)
 
+    def test_a_picture_already_downloaded_is_not_downloaded_again(self):
+        first = image_cache.fetch(self.origin + "/p.png")
+        ImageServer.received_headers = {}
+
+        second = image_cache.fetch(self.origin + "/p.png")
+
+        self.assertEqual(second, first)
+        self.assertEqual(ImageServer.received_headers, {}, "went back to the server")
+
+    def test_two_pictures_that_share_a_filename_are_kept_apart(self):
+        # image.jpg is what half the photos on the internet are called.
+        first = image_cache.fetch(self.origin + "/a/image.png")
+        second = image_cache.fetch(self.origin + "/b/photo")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(self.cached_files()), 2)
+
     def test_request_headers_are_sent(self):
         image_cache.fetch(self.origin + "/p.png",
-                          {"Referer": "https://sender/", "User-Agent": "FCast"},
-                          name="p")
+                          {"Referer": "https://sender/", "User-Agent": "FCast"})
 
         self.assertEqual(ImageServer.received_headers.get("Referer"), "https://sender/")
         self.assertEqual(ImageServer.received_headers.get("User-Agent"), "FCast")
 
     def test_a_download_that_fails_caches_nothing(self):
-        self.assertIsNone(image_cache.fetch(self.origin + "/missing.png", name="p"))
+        self.assertIsNone(image_cache.fetch(self.origin + "/missing.png"))
         self.assertEqual(self.cached_files(), [])
 
     def test_something_that_is_not_a_picture_is_refused(self):
         # A 200 with an image content type and a sign-in page in the body is
         # how a CDN answers a request it does not like. Cached and shown, it
         # is indistinguishable from the add-on being broken.
-        self.assertIsNone(image_cache.fetch(self.origin + "/notapicture.png", name="p"))
+        self.assertIsNone(image_cache.fetch(self.origin + "/notapicture.png"))
         self.assertEqual(self.cached_files(), [])
 
-    def test_clearing_keeps_the_picture_that_is_on_screen(self):
-        first = image_cache.fetch(self.origin + "/one.png", name="one")
-        second = image_cache.fetch(self.origin + "/two.png", name="two")
+    def test_the_oldest_pictures_go_when_the_cache_is_full(self):
+        original = image_cache.MAX_FILES
+        image_cache.MAX_FILES = 3
+        try:
+            paths = [image_cache.fetch(self.origin + "/p%d.png" % i) for i in range(5)]
+        finally:
+            image_cache.MAX_FILES = original
 
-        image_cache.clear(keep=second)
+        self.assertEqual(len(self.cached_files()), 3)
+        self.assertTrue(os.path.exists(paths[-1]))
+        self.assertFalse(os.path.exists(paths[0]))
 
-        self.assertEqual(self.cached_files(), [os.path.basename(second)])
-        self.assertFalse(os.path.exists(first))
+    def test_a_picture_shown_again_survives_the_cull(self):
+        original = image_cache.MAX_FILES
+        image_cache.MAX_FILES = 2
+        try:
+            oldest = image_cache.fetch(self.origin + "/one.png")
+            image_cache.fetch(self.origin + "/two.png")
+            # Casting it again makes it the youngest, not the next to go.
+            image_cache.fetch(self.origin + "/one.png")
+            image_cache.fetch(self.origin + "/three.png")
+        finally:
+            image_cache.MAX_FILES = original
+
+        self.assertTrue(os.path.exists(oldest))
 
     def test_clearing_everything_leaves_nothing_behind(self):
-        image_cache.fetch(self.origin + "/one.png", name="one")
+        image_cache.fetch(self.origin + "/one.png")
 
         image_cache.clear()
 
@@ -582,13 +615,14 @@ class TestPreloading(CacheTestCase):
         main.sessions.append(self.session)
         self.previous_player, main.player = main.player, FakePlayer()
         main.playlist = None
-        main.cached_image = None
+        main.cancel_pending_image()
 
     def tearDown(self):
         main.sessions.clear()
         main.image_viewer.close()
         main.player = self.previous_player
         main.playlist = None
+        main.cancel_pending_image()
         ImageServer.delay = 0.0
         xbmcaddon.reset_settings()
         super().tearDown()
@@ -656,23 +690,80 @@ class TestPreloading(CacheTestCase):
 
         self.assertEqual(self.shown_paths(), [])
 
-    def test_the_picture_it_replaces_is_cleaned_up(self):
+    def test_the_picture_it_replaces_is_kept_for_next_time(self):
+        # Stepping back through a slideshow is the common case, and it should
+        # not mean downloading the previous photo all over again.
         self.cast("/one.png")
         self.assertTrue(wait_for(lambda: self.shown_paths()))
 
         self.cast("/two.png")
         self.assertTrue(wait_for(lambda: len(self.shown_paths()) == 2))
 
-        self.assertEqual(len(self.cached_files()), 1)
-        self.assertTrue(os.path.exists(self.shown_paths()[1]))
+        self.assertEqual(len(self.cached_files()), 2)
+        for path in self.shown_paths():
+            self.assertTrue(os.path.exists(path))
 
-    def test_stopping_clears_the_cache(self):
+    def test_casting_the_picture_already_on_screen_leaves_it_alone(self):
+        # Senders re-send what is showing. Acting on it means a torn-down
+        # viewer, a rebuild, a re-download and Kodi's window sound each time.
+        self.cast()
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        xbmc.builtins_called.clear()
+
+        self.cast()
+        time.sleep(0.1)
+
+        self.assertEqual(self.shown_paths(), [])
+        self.assertEqual(self.session.states()[-1], PlayBackState.PLAYING)
+
+    def test_the_same_picture_is_shown_again_after_the_viewer_is_closed(self):
+        # Which is the whole reason that guard asks whether it is on screen
+        # rather than whether it was the last one asked for.
+        self.cast()
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        main.handle_stop(None)
+        xbmc.builtins_called.clear()
+
+        self.cast()
+
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+
+    def test_a_repeat_of_a_picture_still_downloading_is_ignored(self):
+        ImageServer.delay = 0.3
+        self.cast("/slow.png")
+
+        self.cast("/slow.png")
+
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        time.sleep(0.4)
+        self.assertEqual(len(self.shown_paths()), 1)
+
+    def test_the_same_photo_twice_in_a_queue_does_not_stall_it(self):
+        # Skipping the redraw for a picture already up must not also skip the
+        # countdown, or a queue holding the same photo twice stops there.
+        item = {"container": "image/png", "url": self.origin + "/same.png",
+                "showDuration": 0.2}
+
+        main.handle_play(None, playlist_message([item, dict(item)]))
+        self.assertTrue(wait_for(lambda: self.shown_paths()))
+        xbmcgui.current_dialog_id = WINDOW_SLIDESHOW
+        main.image_viewer.poll()
+
+        time.sleep(0.25)
+        main.image_viewer.poll()
+
+        self.assertEqual(main.playlist.index, 1)
+        self.assertGreater(main.image_viewer.seconds_left, 0.0)
+        # Redrawn once, for the first of the two.
+        self.assertEqual(len(self.shown_paths()), 1)
+
+    def test_stopping_keeps_what_was_downloaded(self):
         self.cast()
         self.assertTrue(wait_for(lambda: self.shown_paths()))
 
         main.handle_stop(None)
 
-        self.assertEqual(self.cached_files(), [])
+        self.assertEqual(len(self.cached_files()), 1)
 
     def test_a_playlist_downloads_each_picture_as_it_comes_round(self):
         # The two halves of this work together or not at all: the countdown

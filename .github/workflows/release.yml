@@ -1,9 +1,20 @@
 name: Publish add-on repository
 
 # Tag a release to publish it: bump the version in addon.xml, commit, then
-# `git tag v0.1.2-beta && git push --tags`. Kodi only offers an update when the
+# `git tag v0.1.2 && git push --tags`. Kodi only offers an update when the
 # published version is higher than the installed one, so the bump is what makes
 # devices pick it up.
+#
+# Pre-release versions must be written with '~': addon.xml 1.0.0~beta1, tagged
+# v1.0.0-beta1, because a git ref cannot contain '~'. Kodi compares versions
+# Debian-style - everything after '-' is a revision, and a revision sorts
+# ABOVE no revision - so 1.0.0-beta1 would outrank the 1.0.0 that follows it
+# and nobody running the beta would ever be offered the release. '~' is the
+# one character that sorts below empty, which is what makes it work.
+#
+# Builds for testers go through prerelease.yml instead: tag them p1.0.0-beta1
+# or 1.0.0-beta1-pre and they are attached to a GitHub release without being
+# published to the repository at all.
 on:
   push:
     tags: ['v*']
@@ -31,9 +42,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           addon_version=$(sed -n 's/.*<addon .*version="\([^"]*\)".*/\1/p' addon.xml)
-          tag_version="${GITHUB_REF_NAME#v}"
-          if [ "$addon_version" != "$tag_version" ]; then
-            echo "tag $tag_version does not match addon.xml version $addon_version" >&2
+          # See the note at the top: the tag v1.0.0-beta1 stands for the
+          # add-on version 1.0.0~beta1, since '~' cannot appear in a git ref.
+          # Done with sed rather than ${x/-/~}, where bash expands the tilde
+          # to $HOME and quietly produces 1.0.0/home/runnerbeta1.
+          expected=$(printf '%s' "${GITHUB_REF_NAME#v}" | sed 's/-/~/')
+          if [ "$addon_version" != "$expected" ]; then
+            echo "tag $GITHUB_REF_NAME expects addon.xml version $expected," >&2
+            echo "but addon.xml says $addon_version" >&2
             exit 1
           fi
 

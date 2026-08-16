@@ -12,6 +12,8 @@ Official web site: [fcast.org](https://fcast.org)
 
 This add-on is an unofficial FCast receiver for Kodi. It allows you to stream content from any FCast client to Kodi media center.
 
+Website, with installation and a short manual: [ozankiratli.github.io/kodi-fcast-receiver](https://ozankiratli.github.io/kodi-fcast-receiver/)
+
 The receiver listens on TCP port `46899` and advertises itself over mDNS as `_fcast._tcp`, so senders find it automatically on the local network. Senders can also connect directly by IP if discovery is unavailable.
 
 **Requirements**
@@ -146,6 +148,17 @@ To see the add-on's own log lines, turn on **Settings → System → Logging →
 ```
 grep "FCast Receiver:" ~/.kodi/temp/kodi.log
 ```
+
+### Website
+
+The landing page is `site/index.html` and `site/style.css`, plain static files with nothing fetched from a third party. Build the whole published tree and open it:
+
+```
+make pages
+python3 -m http.server -d repo
+```
+
+`make pages` is the add-on repository plus the page, because GitHub Pages serves **one artifact per site**: publishing either on its own takes the other one down, and a site without `addons.xml` stops every installed device from seeing updates. That is why `.github/workflows/pages.yml`, which republishes the page when `site/` changes on `main`, rebuilds the repository from the newest `v*` tag rather than from `main` — editing the page can never push an unreleased version to devices.
 
 ### Diagnosing discovery problems
 

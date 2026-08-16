@@ -58,8 +58,14 @@ jobs:
 
       # base_url is where Pages will actually serve repo/ from, and it has to
       # be baked into the repository add-on before the zip is built.
-      - name: Build add-on and repository
-        run: make repo REPO_URL=${{ steps.pages.outputs.base_url }}
+      #
+      # `pages` is the repository plus the landing page. Both go up as one
+      # artifact because Pages serves one artifact per site: publishing the
+      # repository alone would take the site down, and pages.yml - which
+      # republishes the site when only site/ changes - has the same rule from
+      # the other side.
+      - name: Build add-on, repository and website
+        run: make pages REPO_URL=${{ steps.pages.outputs.base_url }}
 
       - uses: actions/upload-pages-artifact@v5
         with:

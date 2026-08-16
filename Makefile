@@ -5,6 +5,11 @@ DIST=dist
 STAGE=$(DIST)/$(ADDON_ID)
 ZIP=$(DIST)/$(ADDON_ID)-$(VERSION).zip
 
+# Source of the landing page, and the tree published to GitHub Pages -- which
+# is also where `repo` writes the add-on repository. See the `site` target.
+SITE=site
+PAGES=repo
+
 # The add-on payload: everything that must exist on a device, and nothing else.
 # Kept explicit so neither a zip nor a deploy can land a subset of the files.
 # CHANGELOG.md is deliberately not in here: Kodi shows the <news> element
@@ -35,7 +40,7 @@ $(ZIP): $(PAYLOAD) addon.xml
 	@echo "built $(ZIP)"
 
 clean:
-	@rm -rf $(DIST) repo
+	@rm -rf $(DIST) $(PAGES)
 	@echo "cleaned"
 
 # Runs against stubbed Kodi modules, so no device and no Kodi install needed.
@@ -98,4 +103,20 @@ endif
 repo: $(ZIP)
 	@python3 dev/tools/build_repo.py --url $(REPO_URL)
 
-.PHONY: all clean deploy deploy-ssh repo test
+# The landing page, copied to the root of the same tree the repository is built
+# in. GitHub Pages serves exactly one artifact per site, so the page and the
+# repository have to be published together: deploying either on its own takes
+# the other one down with it, and a missing addons.xml stops every installed
+# device from seeing updates.
+site:
+	@mkdir -p $(PAGES)
+	@cp $(SITE)/index.html $(SITE)/style.css icon.png $(PAGES)/
+	@echo "site copied into $(PAGES)/"
+
+# What CI uploads to Pages. Sequential, not a plain prerequisite list: the
+# repository build wipes its output directory, so a parallel make could copy
+# the page in first and watch it be deleted.
+pages: repo
+	@$(MAKE) --no-print-directory site
+
+.PHONY: all clean deploy deploy-ssh pages repo site test

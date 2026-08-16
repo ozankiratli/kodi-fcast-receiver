@@ -1,51 +1,27 @@
 # Changelog
 
-Kodi shows the `<news>` element from `addon.xml` in the add-on's information
-dialog, not this file. This is the fuller history, with the commits behind each
-release: `dev/scripts/bump-version.sh` adds a new section from the git log, and
-the prose under each heading is written by hand.
+Kodi shows the `<news>` element from `addon.xml` in the add-on's information dialog, not this file. This is the fuller history, with the commits behind each release: `dev/scripts/bump-version.sh` adds a new section from the git log, and the prose under each heading is written by hand.
 
 ## p0.9.9-pre (2026-08-15)
 
-A test build for FCast protocol **v3**. Not published to the add-on
-repository: install the zip by hand if you want to try it.
+A test build for FCast protocol **v3**. Not published to the add-on repository: install the zip by hand if you want to try it.
 
-**Protocol v3.** The receiver now announces v3 and implements it: the `Initial`
-handshake, so a sender that connects mid-playback is told what is already on
-screen; `PlayUpdate`, so several senders stay in step with each other; event
-subscription with `MediaItemEnd`, which is what lets a sender's own queue move
-to the next item; `SetPlaylistItem`; and volume in both directions.
+**Protocol v3.** The receiver now announces v3 and implements it: the `Initial` handshake, so a sender that connects mid-playback is told what is already on screen; `PlayUpdate`, so several senders stay in step with each other; event subscription with `MediaItemEnd`, which is what lets a sender's own queue move to the next item; `SetPlaylistItem`; and volume in both directions.
 
-**Grayjay queues.** A video that played to its end left Grayjay's queue
-stranded. The receiver now reports the item that finished, with the item
-attached — a report with nothing in it tells the sender nothing, so its queue
-never advanced.
+**Grayjay queues.** A video that played to its end left Grayjay's queue stranded. The receiver now reports the item that finished, with the item attached — a report with nothing in it tells the sender nothing, so its queue never advanced.
 
-**Pictures.** Cast photos used to be handed to the video player, which showed
-them for a few milliseconds and closed. They now go to Kodi's picture viewer:
+**Pictures.** Cast photos used to be handed to the video player, which showed them for a few milliseconds and closed. They now go to Kodi's picture viewer:
 
-- Photos are downloaded before being shown, so the picture already up stays
-  there instead of the screen going black for the length of the download. The
-  last dozen are kept, so stepping back through a slideshow costs nothing
-- A picture on screen counts as the box being in use. Kodi treats a single
-  picture as an idle screen, so its screensaver would start up behind the
-  picture and, on some skins, be audible when it could not come to the front
-- A sender re-sending the picture already up no longer tears the viewer down
-  and rebuilds it for the same photo
+- Photos are downloaded before being shown, so the picture already up stays there instead of the screen going black for the length of the download. The last dozen are kept, so stepping back through a slideshow costs nothing
+- A picture on screen counts as the box being in use. Kodi treats a single picture as an idle screen, so its screensaver would start up behind the picture and, on some skins, be audible when it could not come to the front
+- A sender re-sending the picture already up no longer tears the viewer down and rebuilds it for the same photo
 - Stop from a sender closes the viewer, and closing it from Kodi tells senders
 
-**Playlists.** A sender can hand over a whole queue, and the receiver walks it:
-offset, per-item volume and speed, jumping between items, and `showDuration`
-for pictures, so a photo in a queue moves on by itself.
+**Playlists.** A sender can hand over a whole queue, and the receiver walks it: offset, per-item volume and speed, jumping between items, and `showDuration` for pictures, so a photo in a queue moves on by itself.
 
-**Settings**, at Add-ons → Services → FCast Receiver → Configure: on-screen
-notifications, picture downloading, keeping the screen awake, and how long a
-picture in a playlist stays up.
+**Settings**, at Add-ons → Services → FCast Receiver → Configure: on-screen notifications, picture downloading, keeping the screen awake, and how long a picture in a playlist stays up.
 
-**Failures are visible.** Everything the add-on logged was `LOGDEBUG`, which
-Kodi hides unless debug logging is on, so a failed download, a viewer that
-never opened, or discovery that never registered all looked exactly like
-working. Those now log at warning level, and connections at info.
+**Failures are visible.** Everything the add-on logged was `LOGDEBUG`, which Kodi hides unless debug logging is on, so a failed download, a viewer that never opened, or discovery that never registered all looked exactly like working. Those now log at warning level, and connections at info.
 
 - (b64516) Tests for image viewer updated
 - (6393f2) README updated

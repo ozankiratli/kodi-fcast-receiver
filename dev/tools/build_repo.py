@@ -6,7 +6,7 @@ three kinds of static file: an ``addons.xml`` index, its md5 checksum, and one
 zip per add-on version. Nothing dynamic is involved, so repo/ can be served by
 GitHub Pages, by a web server on the LAN, or off a NAS share.
 
-    python3 tools/build_repo.py --url https://ozankiratli.github.io/kodi-fcast-receiver
+    python3 dev/tools/build_repo.py --url https://ozankiratli.github.io/kodi-fcast-receiver
 
 The generated repository add-on is itself listed in the index, so once it is
 installed on a device it can update itself along with everything else.
@@ -20,7 +20,8 @@ import sys
 import xml.etree.ElementTree as ElementTree
 import zipfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The repository root, two levels above dev/tools.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Identity of the repository add-on this script generates.
 REPO_ID = "repository.fcast.ozankiratli"

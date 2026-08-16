@@ -81,14 +81,22 @@ Enable the following Kodi setting for speed control:
 * **Playback position sync** — Streams now start at the current playback position of the sending device.
 * **Stream cancellation freeze** — Cancelling a stream occasionally caused Kodi to freeze. This is now resolved.
 
+* **Cast photos** — Photos were handed to the video player, which rendered them for a few milliseconds and closed. They now go to Kodi's picture viewer, are downloaded before being shown so the screen does not go black for the length of the transfer, and keep the box out of its screensaver while they are up.
+* **Sender queues** — A video that played to its end left the sender's queue stranded, because the receiver never reported which item had finished. Grayjay and other senders now advance on their own.
+* **Playback state for pictures** — A sender connecting or syncing while a photo was on screen was told nothing was playing, since the state came from the player and a picture never reaches it.
+
 ### Protocol support
 
-The receiver implements FCast protocol **v2** and announces itself as such. Senders on v3 or later negotiate down, as the specification requires, and their v3-only messages (`Initial`, playlists, event subscription) are accepted and ignored rather than treated as errors. Playlists and event subscription are not implemented.
+The receiver implements FCast protocol **v3** and announces itself as such: the `Initial` handshake, `PlayUpdate`, event subscription with `MediaItemEnd`, `SetPlaylistItem`, playlists the receiver walks itself, and volume in both directions. Senders on v1 or v2 negotiate down, as the specification requires.
+
+Not implemented, and ignored rather than treated as errors: key events (`KeyDown` / `KeyUp`) and the `forwardCache` / `backwardCache` pre-loading hints.
 
 ### Known Issues
 
 * **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently while the video speeds up to catch up, breaking A/V sync. This is an `inputstream.adaptive` problem, not a receiver one: it reproduces with any add-on playing adaptive streams, whether or not FCast is involved (see xbmc/xbmc#22625). There is no workaround available from this add-on.
-* **Images are not displayed properly** — CastLab sends photos with an image MIME type, which Kodi treats as video. The image appears for a few milliseconds before the player closes. A dedicated image path is needed.
+* **CastLab photo albums do not advance by themselves** — CastLab keeps its queue on the phone and sends one photo at a time, so each arrives as a single cast rather than as a playlist. **Picture duration** does not apply to those, by design: a photo cast on its own stays up until something dismisses it. Use CastLab's own autoplay, or a sender that sends a real playlist.
+* **The picture viewer covers the Kodi UI** — Kodi's picture viewer is a modal dialog and draws above everything, including Settings, so nothing else is reachable while a photo is on screen. This is Kodi's own behaviour; the official FCast receiver behaves the same way.
+* **Discovery needs Avahi** — All three discovery backends talk to Avahi, so the receiver only advertises itself on Linux. On Windows, macOS and Android it still works, but senders have to be pointed at it by IP.
 
 ## Development
 
@@ -106,7 +114,7 @@ pip install -U mpv kodistubs
 make test
 ```
 
-The suite runs against stubbed Kodi modules in `tests/stubs`, so it needs neither Kodi nor a device. It covers wire framing across every chunk boundary, opcode and unknown-field tolerance, version negotiation, and stream classification.
+The suite runs against stubbed Kodi modules in `dev/tests/stubs`, so it needs neither Kodi nor a device. It covers wire framing across every chunk boundary, opcode and unknown-field tolerance, version negotiation, and stream classification.
 
 ### Deploying to a device
 
@@ -141,7 +149,7 @@ grep "FCast Receiver:" ~/.kodi/temp/kodi.log
 
 ### Diagnosing discovery problems
 
-`tools/mdns_probe.py` runs standalone on a device, without Kodi. It reports which D-Bus bindings and Avahi tools are present, then registers the service with each backend in turn so you can confirm it with `avahi-browse -rt _fcast._tcp` from another machine.
+`dev/tools/mdns_probe.py` runs standalone on a device, without Kodi. It reports which D-Bus bindings and Avahi tools are present, then registers the service with each backend in turn so you can confirm it with `avahi-browse -rt _fcast._tcp` from another machine.
 
 ## Acknowledgments
 

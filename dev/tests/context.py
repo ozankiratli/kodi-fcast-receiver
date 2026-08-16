@@ -4,7 +4,8 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+# ../.. from dev/tests: the tests live under dev/, the add-on does not.
+ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # Stubs first: the real xbmc modules only exist inside Kodi.
 for path in (os.path.join(HERE, "stubs"), os.path.join(ROOT, "resources", "lib")):

@@ -18,7 +18,8 @@ CORE_STRINGS = {
     "14045": "{0:d} sec",
 }
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The repository root, two levels above dev/tests.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SETTINGS_FILE = os.path.join(ROOT, "resources", "settings.xml")
 STRINGS_FILE = os.path.join(
     ROOT, "resources", "language", "resource.language.en_gb", "strings.po")

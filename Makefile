@@ -7,7 +7,10 @@ ZIP=$(DIST)/$(ADDON_ID)-$(VERSION).zip
 
 # The add-on payload: everything that must exist on a device, and nothing else.
 # Kept explicit so neither a zip nor a deploy can land a subset of the files.
-PAYLOAD=addon.xml icon.png changelog.txt LICENSE.txt resources
+# CHANGELOG.md is deliberately not in here: Kodi shows the <news> element
+# from addon.xml, and only falls back to a changelog.txt inside the add-on
+# when that element is empty.
+PAYLOAD=addon.xml icon.png LICENSE.txt resources
 
 # Override per device: make deploy KODI_HOST=pi@raspberrypi
 KODI_HOST ?=
@@ -37,7 +40,7 @@ clean:
 
 # Runs against stubbed Kodi modules, so no device and no Kodi install needed.
 test:
-	@python3 -m unittest discover -s tests -t tests -v
+	@python3 -m unittest discover -s dev/tests -t dev/tests -v
 
 # Push the whole add-on directory in one shot. --delete matters: copying
 # individual files by hand is how a new module ends up importing a symbol from
@@ -93,6 +96,6 @@ endif
 
 # Build the static Kodi repository tree (addons.xml + md5 + zips) in repo/.
 repo: $(ZIP)
-	@python3 tools/build_repo.py --url $(REPO_URL)
+	@python3 dev/tools/build_repo.py --url $(REPO_URL)
 
 .PHONY: all clean deploy deploy-ssh repo test

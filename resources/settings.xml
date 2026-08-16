@@ -29,6 +29,11 @@
                     <default>true</default>
                     <control type="toggle"/>
                 </setting>
+                <setting id="keep_awake_for_pictures" type="boolean" label="32019" help="32020">
+                    <level>0</level>
+                    <default>true</default>
+                    <control type="toggle"/>
+                </setting>
             </group>
             <group id="2" label="32018">
                 <setting id="playlist_image_duration" type="integer" label="32012" help="32013">

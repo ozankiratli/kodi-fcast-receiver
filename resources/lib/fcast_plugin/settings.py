@@ -17,6 +17,7 @@ SHOW_NOTIFICATIONS = 'show_notifications'
 PLAYLIST_IMAGE_DURATION = 'playlist_image_duration'
 PLAYLIST_IMAGE_DURATION_OVERRIDE = 'playlist_image_duration_override'
 PRELOAD_IMAGES = 'preload_images'
+KEEP_AWAKE_FOR_PICTURES = 'keep_awake_for_pictures'
 
 # Also what settings.xml declares as each setting's <default>.
 DEFAULTS = {
@@ -24,6 +25,7 @@ DEFAULTS = {
     PLAYLIST_IMAGE_DURATION: 10,
     PLAYLIST_IMAGE_DURATION_OVERRIDE: False,
     PRELOAD_IMAGES: True,
+    KEEP_AWAKE_FOR_PICTURES: True,
 }
 
 
@@ -71,3 +73,8 @@ def image_duration_overrides_sender() -> bool:
 def preload_images() -> bool:
     """Whether to download a picture before putting it on screen."""
     return get_bool(PRELOAD_IMAGES)
+
+
+def keep_awake_for_pictures() -> bool:
+    """Whether a picture on screen should count as the box being in use."""
+    return get_bool(KEEP_AWAKE_FOR_PICTURES)

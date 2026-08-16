@@ -77,3 +77,11 @@ msgstr ""
 msgctxt "#32018"
 msgid "Playlists"
 msgstr ""
+
+msgctxt "#32019"
+msgid "Keep the screen awake while a picture is showing"
+msgstr ""
+
+msgctxt "#32020"
+msgid "Kodi treats a single picture as an idle screen rather than as something playing, so the screensaver starts up behind it and, on some skins, is audible when it cannot come to the front. Turn this off to let the screen go to sleep over a cast picture."
+msgstr ""

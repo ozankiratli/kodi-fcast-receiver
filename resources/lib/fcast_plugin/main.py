@@ -1,6 +1,7 @@
 import sys
 import json
 import socket
+import time
 from itertools import count
 from threading import Thread
 from typing import List, Optional
@@ -67,6 +68,11 @@ image_request: int = 0
 image_url: Optional[str] = None
 image_pending: bool = False
 
+# How often to tell Kodi a picture on screen counts as the box being in use.
+# Kodi's shortest screensaver delay is a minute, so this has room to spare.
+WAKE_INTERVAL = 30.0
+last_wake: float = 0.0
+
 # Pictures bypass the player entirely, so they get their own viewer. The
 # lambdas defer resolving the callbacks, which are defined further down.
 image_viewer = ImageViewer(on_closed=lambda: on_image_closed(),
@@ -127,6 +133,7 @@ def check_player():
         if ticks >= 20:
             ticks = 0
             check_volume()
+            keep_awake()
 
         if monitor.waitForAbort(0.05):
             break
@@ -614,6 +621,33 @@ def broadcast_volume_update(volume: float) -> None:
     message = VolumeUpdateMessage(volume)
     for session in list(sessions):
         session.send_volume_update(message)
+
+def keep_awake() -> None:
+    """Tell Kodi the box is in use while a picture is on screen.
+
+    Kodi only counts the picture viewer as activity when it is running a
+    slideshow of its own: CGUIWindowSlideShow::Process resets the screensaver
+    behind `if (m_bSlideShow ...)`, and a single picture put up with
+    ShowPicture does not set that. So the idle timer keeps running underneath
+    a cast photo, and when it expires the screensaver - or whatever a skin
+    does on idle - tries to come to the front, is refused because the picture
+    viewer is a modal dialog, and on some skins that refusal is audible.
+
+    Input.ExecuteAction resets the screensaver timer for us
+    (CInputOperations::handleScreenSaver). ACTION_NOOP is what it sounds like:
+    the window manager hands it to the picture viewer, which ignores it.
+    """
+    global last_wake
+
+    if not image_viewer.is_showing or not settings.keep_awake_for_pictures():
+        return
+
+    now = time.time()
+    if now - last_wake < WAKE_INTERVAL:
+        return
+
+    last_wake = now
+    kodi_jsonrpc("Input.ExecuteAction", {"action": "noop"})
 
 def check_volume() -> None:
     """Publish volume changes. Kodi offers no callback for this, so poll."""

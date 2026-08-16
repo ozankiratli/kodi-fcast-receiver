@@ -882,6 +882,92 @@ class TestPreloading(CacheTestCase):
             self.assertNotIn(self.origin, path)
 
 
+class TestKeepingTheBoxAwake(unittest.TestCase):
+    """A picture on screen has to count as the box being in use.
+
+    Kodi resets the screensaver only for a slideshow of its own, so the idle
+    timer runs on underneath a cast photo. When it expires the screensaver
+    tries to come to the front, is refused because the picture viewer is a
+    modal dialog, and on some skins the refusal is audible - which is how this
+    was noticed on a device.
+    """
+
+    def setUp(self):
+        xbmc.reset_jsonrpc()
+        xbmcaddon.reset_settings()
+        xbmcaddon.settings[settings.PRELOAD_IMAGES] = False
+        xbmcgui.current_window_id = 10000
+        xbmcgui.current_dialog_id = 9999
+        main.sessions.clear()
+        main.sessions.append(FakeSession())
+        self.previous_player, main.player = main.player, FakePlayer()
+        main.last_wake = 0.0
+
+    def tearDown(self):
+        main.sessions.clear()
+        main.image_viewer.close()
+        main.player = self.previous_player
+        main.last_wake = 0.0
+        xbmc.reset_jsonrpc()
+        xbmcaddon.reset_settings()
+
+    def wake_calls(self):
+        return [call for call in xbmc.jsonrpc_calls
+                if call.get("method") == "Input.ExecuteAction"]
+
+    def show_a_picture(self):
+        main.handle_image(PlayMessage(container="image/jpeg", url="https://e/p.jpg"))
+        xbmc.reset_jsonrpc()
+
+    def test_nothing_is_sent_with_no_picture_on_screen(self):
+        main.keep_awake()
+
+        self.assertEqual(self.wake_calls(), [])
+
+    def test_a_picture_on_screen_keeps_the_screensaver_off(self):
+        self.show_a_picture()
+
+        main.keep_awake()
+
+        self.assertEqual(len(self.wake_calls()), 1)
+        # ACTION_NOOP: the window manager hands it to the picture viewer,
+        # which ignores it, and Kodi resets the screensaver timer on the way.
+        self.assertEqual(self.wake_calls()[0]["params"], {"action": "noop"})
+
+    def test_it_is_not_sent_on_every_tick(self):
+        self.show_a_picture()
+
+        for _ in range(10):
+            main.keep_awake()
+
+        self.assertEqual(len(self.wake_calls()), 1)
+
+    def test_it_goes_again_once_the_interval_has_passed(self):
+        self.show_a_picture()
+        main.keep_awake()
+
+        main.last_wake -= main.WAKE_INTERVAL + 1
+        main.keep_awake()
+
+        self.assertEqual(len(self.wake_calls()), 2)
+
+    def test_the_user_can_let_the_screen_sleep(self):
+        xbmcaddon.settings[settings.KEEP_AWAKE_FOR_PICTURES] = False
+        self.show_a_picture()
+
+        main.keep_awake()
+
+        self.assertEqual(self.wake_calls(), [])
+
+    def test_it_stops_once_the_picture_is_gone(self):
+        self.show_a_picture()
+        main.image_viewer.close()
+
+        main.keep_awake()
+
+        self.assertEqual(self.wake_calls(), [])
+
+
 class TestPictureDuration(unittest.TestCase):
     """showDuration: only playlists, and only as long as the user allows."""
 

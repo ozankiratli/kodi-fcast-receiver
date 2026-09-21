@@ -393,6 +393,22 @@ class TestLosingTheSender(SenderLossTestCase):
         self.assertFalse(wait_for_builtin('PlayerControl(Stop)', timeout=0.3))
         self.assertIn(returned, main.sessions)
 
+    def test_one_sender_leaving_does_not_stop_another_senders_stream(self):
+        # Two senders, and the second one's stream is what is playing. The
+        # first disconnecting must not touch it. See dev/KNOWNISSUES.md: the
+        # reported version of this is a Stop arriving from the sender that is
+        # leaving, which is a separate gap -- this pins down that the
+        # connection-loss path is not also a route to it.
+        leaving = FakeSession("192.168.1.9")
+        playing = FakeSession("192.168.1.20")
+        main.sessions.extend([leaving, playing])
+        self.casting("http://192.168.1.20:8080/film.mp4", peer="192.168.1.20")
+
+        main.on_sender_lost(leaving, "192.168.1.9")
+
+        self.assertFalse(wait_for_builtin('PlayerControl(Stop)', timeout=0.3))
+        self.assertIn(playing, main.sessions)
+
     def test_playback_that_is_not_ours_is_left_alone(self):
         session = FakeSession("192.168.1.9")
         main.sessions.append(session)

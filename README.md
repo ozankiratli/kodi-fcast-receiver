@@ -51,9 +51,12 @@ Grab the zip from the [releases page](https://github.com/ozankiratli/kodi-fcast-
 
 ### Kodi
 
-Enable the following Kodi setting for speed control:
+The receiver needs nothing changed in Kodi to work. One setting is worth knowing about, because it is a trade-off rather than an improvement — **Settings → Player → Videos → Sync playback to display**, which Kodi leaves off:
 
-* **Settings → Player → Videos → Sync playback to display** — set to **On**
+* **Off** — audio and video stay in step for the length of a film. Playback speed sent from a sender does nothing.
+* **On** — playback speed from a sender works, clamped to the 0.8x to 1.5x Kodi supports. Audio and video drift apart over a long playback, often far enough to notice somewhere after the forty minute mark.
+
+The drift is Kodi's doing with that setting rather than the receiver's, and nothing else in the add-on depends on it. Leave it off unless you change playback speed from your phone.
 
 ### Add-on settings
 

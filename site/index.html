@@ -33,12 +33,6 @@
     <a class="button primary" href="#install">Installation</a>
     <a class="button" href="https://github.com/ozankiratli/kodi-fcast-receiver">Source on GitHub</a>
   </p>
-  <p class="banner">
-    <b>Try <a href="#prerelease">p0.9.9-pre</a>.</b>
-    It is the biggest step the project has taken — the full FCast v3 protocol, photos,
-    playlists and volume control — and it is not in the add-on repository yet. Install the
-    zip by hand, and say how it goes.
-  </p>
 </header>
 
 <nav class="toc" aria-label="Sections">
@@ -104,11 +98,9 @@
   </p>
 
   <p class="note">
-    <strong>Which version will I get?</strong> The repository serves the last proper release.
-    The v3 work described above — photos, playlists, volume — is in
-    <a href="#prerelease">p0.9.9-pre</a>, a hand-installed zip until it has had some feedback.
-    Install the repository regardless: it is what brings you the release when it lands, without
-    your having to come back here.
+    <strong>Which version will I get?</strong> The repository serves the current release, and
+    everything described above is in it. Install the repository rather than a zip and Kodi
+    keeps the add-on up to date on its own, without your having to come back here.
   </p>
 
   <h3>From the add-on repository <span class="pill">recommended</span></h3>
@@ -156,85 +148,28 @@
 <section id="prerelease">
   <h2>Test builds</h2>
 
-  <h3>p0.9.9-pre — the full v3 protocol <span class="pill">try this</span></h3>
   <p>
-    This is the build worth running. The receiver used to hold a connection to a modern sender
-    only by luck, and did little once it had one. It now implements FCast <b>v3</b> and
-    announces itself as such, and the parts that were missing or half-working do their job:
-  </p>
-
-  <ul class="whatsnew">
-    <li>
-      <b>Volume, in both directions.</b> A sender can set the volume on the box, and a change
-      made on the box goes back to the sender. Playback speed too, clamped to the 0.8×–1.5×
-      Kodi supports rather than failing outside it.
-    </li>
-    <li>
-      <b>Queues that move on.</b> The receiver reports each item as it finishes, with the item
-      attached — a report with nothing in it tells the sender nothing, which is why Grayjay's
-      queue used to strand on the video that had just ended.
-    </li>
-    <li>
-      <b>Playlists.</b> A sender can hand over a whole queue and the receiver walks it itself:
-      offset, per-item volume and speed, jumping between items, and a duration for pictures so
-      a photo in a queue moves on by itself.
-    </li>
-    <li>
-      <b>Photos that actually appear.</b> Cast pictures went to the video player, which showed
-      them for a few milliseconds and closed. They go to Kodi's picture viewer now, downloaded
-      before they are shown so the screen never goes black waiting, and they hold off the
-      screensaver while they are up.
-    </li>
-    <li>
-      <b>Senders that join late.</b> The <code>Initial</code> handshake tells a sender what is
-      already on screen when it connects, and <code>PlayUpdate</code> keeps several senders in
-      step with each other.
-    </li>
-    <li>
-      <b>Settings.</b> A configuration screen of its own — notifications, picture downloading,
-      keeping the screen awake, picture duration. See <a href="#settings">the manual</a>.
-    </li>
-    <li>
-      <b>Failures you can see.</b> Everything used to be logged at debug level, which Kodi
-      hides, so a failed download or discovery that never registered looked exactly like
-      working. Those are warnings now, and connections are logged as they happen.
-    </li>
-  </ul>
-
-  <p class="cta-inline">
-    <a class="button primary" href="https://github.com/ozankiratli/kodi-fcast-receiver/releases/download/p0.9.9-pre/service.fcast.receiver-0.9.9.pre.zip">Download p0.9.9-pre</a>
-    <a class="button" href="https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/p0.9.9-pre">Release notes</a>
-  </p>
-  <p class="hint">
-    Install it with <b>Settings → Add-ons → Install from zip file</b>. Already have the add-on?
-    Install the zip over it; there is nothing to uninstall first.
-  </p>
-
-  <div class="callout">
-    <p>
-      <b>Feedback is what this is waiting for.</b> The build stays a test build until it has had
-      some. Once it has, the same code goes out as a proper release through the add-on
-      repository, and every device that installed the repository picks it up on its own.
-    </p>
-    <p>
-      Anything odd — a sender that will not connect, a photo that never appears, a queue that
-      stops — is worth an
-      <a href="https://github.com/ozankiratli/kodi-fcast-receiver/issues">issue on GitHub</a>,
-      with the log lines from <a href="#logs">Reading the log</a>.
-    </p>
-  </div>
-
-  <h3>How test builds work</h3>
-  <p>
-    Builds marked <b>pre-release</b> on the
-    <a href="https://github.com/ozankiratli/kodi-fcast-receiver/releases">releases page</a> are
-    never published to the add-on repository, so no installed Kodi is offered one as an update
-    — you install the zip by hand if you want to try it.
+    Bigger changes go to testers first, as a build marked <b>pre-release</b> on the
+    <a href="https://github.com/ozankiratli/kodi-fcast-receiver/releases">releases page</a>.
+    There may or may not be one at any given moment. The repository always serves the current
+    release, and that is what you get unless you go looking for the other thing.
   </p>
   <p>
-    Their version carries a <code>~</code> — this one is <code>0.9.9~pre</code> — which Kodi
-    sorts <i>below</i> the release that follows it. So the real release supersedes a test build
-    on its own, through the repository, with nothing to uninstall.
+    A test build is never published to the add-on repository, so no installed Kodi is offered
+    one as an update — you install the zip by hand with <b>Settings → Add-ons → Install from
+    zip file</b>, over whatever you already have. There is nothing to uninstall first.
+  </p>
+  <p>
+    Their version carries a <code>~</code>, as in <code>1.1.0~beta1</code>, which Kodi sorts
+    <i>below</i> the release that follows it. So the real release supersedes a test build on
+    its own, through the repository, and you are not left stranded on a version that outranks
+    it.
+  </p>
+  <p>
+    Anything odd in one — a sender that will not connect, a photo that never appears, a queue
+    that stops — is worth an
+    <a href="https://github.com/ozankiratli/kodi-fcast-receiver/issues">issue on GitHub</a>,
+    with the log lines from <a href="#logs">Reading the log</a>.
   </p>
 </section>
 
@@ -384,13 +319,11 @@
   <details id="drift">
     <summary>Audio and video drift apart during a long film</summary>
     <p>
-      Turn <b>Settings → Player → Videos → Sync playback to display</b> off. That setting runs
-      playback from the display's clock, and over a long film the two clocks pull apart — usually
-      far enough to notice somewhere after the forty minute mark. It is Kodi's doing with that
-      setting rather than anything the receiver does, and the receiver does not need it.
-    </p>
-    <p>
-      The only thing turning it off costs you is playback speed control from a sender.
+      Turn <b>Settings → Player → Videos → Sync playback to display</b> off. With that setting
+      on, the audio can start skipping seconds while the video speeds up to catch up, usually
+      somewhere after the forty minute mark; with it off, playback stays in step. It happens
+      with any add-on playing adaptive streams, whether or not FCast is involved, and the
+      receiver does not need the setting for anything but speed control.
     </p>
   </details>
 

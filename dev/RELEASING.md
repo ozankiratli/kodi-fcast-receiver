@@ -24,13 +24,13 @@ The script picks the tag from the version: a version containing `~` becomes a `p
 
 ## Where the release notes come from
 
-Nothing is written twice. `dev/scripts/changelog-section.sh <version>` prints one version's section of `CHANGELOG.md`, and both release workflows publish that as the body of the GitHub release, followed by a standing tail -- `dev/release-notes-tail.md` for a release, `dev/release-notes-tail-prerelease.md` for a test build -- with `@VERSION@` substituted. The tails are the part that does not change from release to release: how to install it, and what to do afterwards.
+Nothing is written twice and nothing is copied by hand. `dev/scripts/changelog-section.sh <version>` prints one version's section of `CHANGELOG.md`, and both release workflows run that exact command and publish its output as the body of the GitHub release, followed by a standing tail -- `dev/release-notes-tail.md` for a release, `dev/release-notes-tail-prerelease.md` for a test build -- with `@VERSION@` substituted. The tails are the part that does not change from release to release: how to install it, and what to do afterwards.
 
 Each workflow runs the extractor twice: once as a gate before building anything, once to write the body. The same script both times, so the gate cannot pass a section the body step would then fail to produce. It refuses three things: a version with no section, an empty section, and a section still carrying the `_Summary goes here._` placeholder, which would otherwise be published as the release notes.
 
 `dev/scripts/check-news.sh` is the other gate. It compares `<news>` against the same element at the previous tag, and unchanged means nobody wrote one for this version. It is a hard failure in `release.yml`, which reaches every installed device, and a warning in `prerelease.yml`, where tagging `rc2` an hour after `rc1` should not require rewriting the information dialog in between.
 
-Both scripts run locally, which is the point of them being scripts rather than steps. Run either one before you tag and you know what CI will say. `workflow_dispatch` on `release.yml` does the same from the other end: it builds and checks everything and creates no release, so a run before the tag exists proves the release would work.
+Both scripts run locally, which is the point of them being scripts rather than steps buried in a workflow. Run either before you tag and you know what CI will say -- see "Seeing it before you tag" below.
 
 ## What each tag does
 
@@ -52,8 +52,6 @@ The landing page and the add-on repository are one GitHub Pages site, and a depl
     # write this version's prose into CHANGELOG.md, above '### Commits'
     # write <news> in addon.xml
     make test
-    dev/scripts/changelog-section.sh 1.0.0~beta1   # what the release body will say
-    dev/scripts/check-news.sh
     git add -A && git commit -m "Release 1.0.0~beta1"
     git tag p1.0.0-beta1
     git push origin main
@@ -67,16 +65,25 @@ Then point testers at the GitHub release page for the zip.
     # write this version's prose into CHANGELOG.md, above '### Commits'
     # write <news> in addon.xml
     make test
-    dev/scripts/changelog-section.sh 1.0.0        # what the release body will say
-    dev/scripts/check-news.sh
     git add -A && git commit -m "Release 1.0.0"
     git tag v1.0.0
     git push origin main
     git push origin v1.0.0
 
-Watch the Publish add-on repository workflow. When it is green, the Pages site carries the new `addons.xml` and zip, and devices pick the update up on their own schedule -- as long as Settings > System > Add-ons > Updates is set to *Install updates automatically*.
+**The release notes are not a step, because nothing has to be done to them.** The changelog section written above *is* the release body. Pushing the tag is what publishes it.
+
+Then watch the Publish add-on repository workflow. When it is green, the Pages site carries the new `addons.xml` and zip, and devices pick the update up on their own schedule -- as long as Settings > System > Add-ons > Updates is set to *Install updates automatically*.
 
 Check it from a device, or with curl against `addons.xml`, before telling anyone. A green workflow means the artifact was published, not that Kodi liked it.
+
+## Seeing it before you tag
+
+Optional, and nothing here is copied anywhere. These are the same two commands the workflow runs, so running them yourself is how you find out now rather than from a failed run:
+
+    dev/scripts/changelog-section.sh 1.0.0   # the release body, above the standing tail
+    dev/scripts/check-news.sh                # the gate on <news>
+
+`workflow_dispatch` on `release.yml` is the same idea from the other end: it builds and checks everything and creates no release, so a run before the tag exists proves the release would work.
 
 ## Building the pieces by hand
 

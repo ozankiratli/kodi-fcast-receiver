@@ -6,6 +6,42 @@ Each version's section here **is** its release notes: `dev/scripts/changelog-sec
 
 Kodi itself shows neither this file nor the release body. What it shows in the add-on's information dialog is the `<news>` element in `addon.xml`, which is written by hand for every release and gated by `dev/scripts/check-news.sh`.
 
+## [1.0.0] - 2026-09-20
+
+The first stable release, and the first to reach the add-on repository since 0.2.2-beta. Everything from the **0.9.9~pre** test build is in it — that build was this work, handed to testers early — together with the connection handling and the documentation below.
+
+**Protocol v3.** The receiver now announces v3 and implements it: the `Initial` handshake, so a sender that connects mid-playback is told what is already on screen; `PlayUpdate`, so several senders stay in step with each other; event subscription with `MediaItemEnd`, which is what lets a sender's own queue move to the next item; `SetPlaylistItem`; and volume in both directions.
+
+**Grayjay queues.** A video that played to its end left Grayjay's queue stranded. The receiver now reports the item that finished, with the item attached — a report with nothing in it tells the sender nothing, so its queue never advanced.
+
+**Pictures.** Cast photos used to be handed to the video player, which showed them for a few milliseconds and closed. They now go to Kodi's picture viewer:
+
+- Photos are downloaded before being shown, so the picture already up stays there instead of the screen going black for the length of the download. The last dozen are kept, so stepping back through a slideshow costs nothing
+- A picture on screen counts as the box being in use. Kodi treats a single picture as an idle screen, so its screensaver would start up behind the picture and, on some skins, be audible when it could not come to the front
+- A sender re-sending the picture already up no longer tears the viewer down and rebuilds it for the same photo
+- Stop from a sender closes the viewer, and closing it from Kodi tells senders
+
+**Playlists.** A sender can hand over a whole queue, and the receiver walks it: offset, per-item volume and speed, jumping between items, and `showDuration` for pictures, so a photo in a queue moves on by itself.
+
+**Settings**, at Add-ons → Services → FCast Receiver → Configure: on-screen notifications, picture downloading, keeping the screen awake, and how long a picture in a playlist stays up.
+
+**A sender that leaves the network.** One that changes network mid-stream — Wi-Fi to cellular, or between access points — does not close its connection, because it is no longer there to close it. Nothing on this end noticed: the connection, its thread and its place in the broadcast list survived for the rest of the Kodi session. The connection is now timed out; writes that the socket only partly accepted are no longer dropped mid-packet, which corrupted the stream to any sender that had stopped reading; and a sender that was serving the media itself takes the stream with it when it goes, instead of leaving Kodi reading an address that will never answer. Playback from anywhere else carries on — a phone going to sleep is not a reason to stop the film.
+
+**Sync playback to display is a choice, not a recommendation.** The README and the website used to tell everyone to turn that Kodi setting on, because a sender's speed control needs it. It also makes audio and video drift apart over a long film. Both sides are written down now, in both places, and the setting is best left off unless you change playback speed from your phone.
+
+**Failures are visible.** Everything the add-on logged was `LOGDEBUG`, which Kodi hides unless debug logging is on, so a failed download, a viewer that never opened, or discovery that never registered all looked exactly like working. Those now log at warning level, and connections at info.
+
+**Known issues** are written down rather than left to be discovered, in `dev/KNOWNISSUES.md`. The one most likely to be met: with two senders connected, one of them disconnecting can stop the stream the other started.
+
+### Commits
+
+- (8c01f5) website is added
+- (9bf562) Midstream lost sender stall workaround
+- (f999ac) Known issues identified, development, release, testing notes added
+- (ea54c4) workflows updated
+
+---
+
 ## [0.9.9~pre] - 2026-08-15
 
 A test build for FCast protocol **v3**. Not published to the add-on repository: install the zip by hand if you want to try it.
@@ -123,6 +159,7 @@ A test build for FCast protocol **v3**. Not published to the add-on repository: 
 - Fixed shared session listeners bug that could cause duplicate event handling with multiple connections
 - Recommended setting: enable Settings → Player → Videos → Sync playback to display for compatibility
 
+[1.0.0]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v1.0.0
 [0.9.9~pre]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/p0.9.9-pre
 [0.2.2-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.2.2-beta
 [0.2.1-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.2.1-beta

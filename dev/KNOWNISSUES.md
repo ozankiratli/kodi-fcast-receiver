@@ -54,7 +54,7 @@ A shape worth considering: track the session that started what is playing, honor
 
 **What happens.** With Settings > Player > Videos > Sync playback to display turned on, audio and video drift apart over a long playback, often far enough to notice somewhere after the forty minute mark. With it off there is no drift, and a sender's speed requests do nothing at all. There is no position of that switch that gives both.
 
-**What is established.** The drift belongs to Kodi's handling of that setting, not to this add-on. Nothing in the receiver needs the setting except `handle_speed`, which applies a sender's request with the JSON-RPC `Player.SetTempo` clamped to 0.8x to 1.5x, and that call does nothing unless the display clock is in use.
+**What is established.** The drift belongs to Kodi's handling of that setting, not to this add-on. It shows up with any add-on playing adaptive streams, FCast or not -- xbmc/xbmc#22625 is the upstream issue the README has cited since before the setting was identified as the lever. Nothing in the receiver needs the setting except `handle_speed`, which applies a sender's request with the JSON-RPC `Player.SetTempo` clamped to 0.8x to 1.5x, and that call does nothing unless the display clock is in use.
 
 Kodi ships the setting off: a guisettings dump taken from the Vero V has `videoplayer.usedisplayasclock` set to `false` and marked as sitting at its default. So nobody meets the drift by accident -- they meet it after being told to turn the setting on, which is what the README and the website told them to do until this was rewritten on 2026-09-20.
 

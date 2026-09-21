@@ -86,7 +86,6 @@ The drift is Kodi's doing with that setting rather than the receiver's, and noth
 * **CastLab compatibility** — Resolved a compatibility issue with the Android CastLab app.
 * **Playback position sync** — Streams now start at the current playback position of the sending device.
 * **Stream cancellation freeze** — Cancelling a stream occasionally caused Kodi to freeze. This is now resolved.
-
 * **Cast photos** — Photos were handed to the video player, which rendered them for a few milliseconds and closed. They now go to Kodi's picture viewer, are downloaded before being shown so the screen does not go black for the length of the transfer, and keep the box out of its screensaver while they are up.
 * **Sender queues** — A video that played to its end left the sender's queue stranded, because the receiver never reported which item had finished. Grayjay and other senders now advance on their own.
 * **Playback state for pictures** — A sender connecting or syncing while a photo was on screen was told nothing was playing, since the state came from the player and a picture never reaches it.
@@ -99,12 +98,15 @@ Not implemented, and ignored rather than treated as errors: key events (`KeyDown
 
 ### Known Issues
 
-* **Audio/video sync drift** — After a long pause or during extended playback (roughly 40+ minutes), the audio stream can begin skipping seconds intermittently while the video speeds up to catch up, breaking A/V sync. This is an `inputstream.adaptive` problem, not a receiver one: it reproduces with any add-on playing adaptive streams, whether or not FCast is involved (see xbmc/xbmc#22625). There is no workaround available from this add-on.
+* **Audio/video sync drift** — During extended playback, roughly 40 minutes in, the audio can begin skipping seconds intermittently while the video speeds up to catch up. It is tied to **Sync playback to display**: with that setting off, playback stays in step. Turning it off is the fix, and the only thing it costs is playback speed control from a sender — see [Configuration](#kodi) above. Nothing in the receiver needs the setting, and nothing in the receiver causes the drift; it reproduces with any add-on playing adaptive streams, whether or not FCast is involved (see xbmc/xbmc#22625).
+* **One sender disconnecting can stop another sender's stream** — With two senders connected, if the first starts a stream, the second takes over with one of its own, and the first then closes its connection, the second's stream stops with it. The receiver acts on a sender's Stop whoever it came from, and senders send one as they disconnect. Reconnect and cast again. Recorded in `dev/KNOWNISSUES.md`.
 * **CastLab photo albums do not advance by themselves** — CastLab keeps its queue on the phone and sends one photo at a time, so each arrives as a single cast rather than as a playlist. **Picture duration** does not apply to those, by design: a photo cast on its own stays up until something dismisses it. Use CastLab's own autoplay, or a sender that sends a real playlist.
 * **The picture viewer covers the Kodi UI** — Kodi's picture viewer is a modal dialog and draws above everything, including Settings, so nothing else is reachable while a photo is on screen. This is Kodi's own behaviour; the official FCast receiver behaves the same way.
 * **Discovery needs Avahi** — All three discovery backends talk to Avahi, so the receiver only advertises itself on Linux. On Windows, macOS and Android it still works, but senders have to be pointed at it by IP.
 
 ## Development
+
+The fuller notes live in [`dev/`](dev/), and are where this is kept current: [`DEVELOPMENT.md`](dev/DEVELOPMENT.md) for the module map and the Kodi constraints that shaped the code, [`TESTING.md`](dev/TESTING.md) for the suite and the tools that exercise a real device, [`RELEASING.md`](dev/RELEASING.md) for versions, tags and what each workflow publishes, and [`KNOWNISSUES.md`](dev/KNOWNISSUES.md) for what is wrong and not yet fixed. What follows is enough to get started.
 
 ### Environment
 
@@ -120,7 +122,7 @@ pip install -U mpv kodistubs
 make test
 ```
 
-The suite runs against stubbed Kodi modules in `dev/tests/stubs`, so it needs neither Kodi nor a device. It covers wire framing across every chunk boundary, opcode and unknown-field tolerance, version negotiation, and stream classification.
+The suite runs against stubbed Kodi modules in `dev/tests/stubs`, so it needs neither Kodi nor a device. [`dev/TESTING.md`](dev/TESTING.md) says what each test file covers, and what no suite covers.
 
 ### Deploying to a device
 

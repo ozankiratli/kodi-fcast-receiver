@@ -68,7 +68,9 @@ Then point testers at the GitHub release page for the zip.
     git add -A && git commit -m "Release 1.0.0"
     git tag v1.0.0
     git push origin main
-    git push origin v1.0.0
+    git push origin refs/tags/v1.0.0
+
+**Spell the tag out as `refs/tags/`** when a branch shares its name. This repository has a branch called `v1.0.0` as well as the tag, and `git push origin v1.0.0` then fails with *src refspec v1.0.0 matches more than one* -- git will not guess which of the two you meant. `refs/tags/v1.0.0` is never ambiguous, so it is the safer form to use always.
 
 **The release notes are not a step, because nothing has to be done to them.** The changelog section written above *is* the release body. Pushing the tag is what publishes it.
 

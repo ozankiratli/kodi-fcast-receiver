@@ -25,12 +25,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # check-news.sh reads addon.xml at the previous tag.
+          fetch-depth: 0
 
       - name: Run tests
         run: make test
 
       - name: Work out the version this tag stands for
+        id: version
         run: |
+          set -euo pipefail
           tag="$GITHUB_REF_NAME"
           case "$tag" in
             p[0-9]*)  version="${tag#p}" ;;
@@ -57,18 +62,43 @@ jobs:
             exit 1
           fi
 
+          echo "version=$addon_version" >> "$GITHUB_OUTPUT"
+          echo "Building $addon_version"
+
+      # The section is where this build's notes come from, so an absent one has to
+      # stop the build rather than publish an empty body.
+      - name: The changelog describes this version
+        run: dev/scripts/changelog-section.sh "${{ steps.version.outputs.version }}" > /dev/null
+
+      # A warning rather than a gate, unlike release.yml. A test build does not reach
+      # anyone who did not go and fetch it, and tagging rc2 an hour after rc1 should
+      # not require rewriting the information dialog in between.
+      - name: The news element has been written for this version
+        run: |
+          dev/scripts/check-news.sh ||
+            echo "::warning::<news> in addon.xml still holds the previous release's text"
+
       - name: Build the add-on zip
         run: make all
+
+      - name: Build the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # This version's CHANGELOG section, then the standing tail for a test build.
+          dev/scripts/changelog-section.sh "$VERSION" > dist/RELEASE_NOTES.md
+          printf '\n' >> dist/RELEASE_NOTES.md
+          sed -e "1,/^-->$/d" -e "s|@VERSION@|${VERSION}|g" \
+              dev/release-notes-tail-prerelease.md >> dist/RELEASE_NOTES.md
+          [ -s dist/RELEASE_NOTES.md ] || { echo "the release notes came out empty" >&2; exit 1; }
+          echo "::group::release body"
+          cat dist/RELEASE_NOTES.md
+          echo "::endgroup::"
 
       - name: Publish the prerelease
         uses: softprops/action-gh-release@v3
         with:
           prerelease: true
           files: dist/*.zip
-          body: |
-            Test build. It is **not** published to the add-on repository, so
-            no installed Kodi will offer it as an update.
-
-            Install it with **Settings → Add-ons → Install from zip file**.
-            The next repository release supersedes it on its own: this version
-            carries a `~`, which Kodi sorts before the release it precedes.
+          body_path: dist/RELEASE_NOTES.md

@@ -13,17 +13,28 @@ So a pre-release is written `1.0.0~beta1` in `addon.xml`. A git ref cannot conta
     dev/scripts/bump-version.sh 1.0.0 --dry-run
     dev/scripts/bump-version.sh 1.0.0
 
-It sets the version in `addon.xml` and puts a new section at the top of `CHANGELOG.md` listing every commit since the last tag. It does not commit, tag or push anything, and it prints what is still yours to do:
+It sets the version in `addon.xml` and prepends a section to `CHANGELOG.md` holding every commit since the last tag under a `### Commits` heading, with the matching reference-link definition at the foot of the file. It does not commit, tag or push anything.
 
-1. Write the summary in `CHANGELOG.md`, replacing the `_Summary goes here._` placeholder above the commit list. The commits stay underneath so anyone reading can see how it got here.
-2. Update `<news>` in `addon.xml`. **That is what Kodi shows in the add-on's information dialog, not `CHANGELOG.md`.** Forgetting it means the release announces the previous one.
-3. Commit, then tag and push.
+Two things are then yours to write, and each has something that refuses to publish without it:
+
+1. **This version's prose in `CHANGELOG.md`, above the `### Commits` heading** -- not over it, because the commit list stays as the record of what actually landed. That section *is* the release notes; see below.
+2. **`<news>` in `addon.xml`.** That is what Kodi shows in the add-on's information dialog, and it is the only release note most people ever see: the changelog is not shipped inside the add-on and the GitHub release body is not reachable from Kodi. It has to be written by hand, because forty words for that dialog are not an extract of anything.
 
 The script picks the tag from the version: a version containing `~` becomes a `p` tag and goes to testers, anything else becomes a `v` tag and goes to everyone.
 
+## Where the release notes come from
+
+Nothing is written twice. `dev/scripts/changelog-section.sh <version>` prints one version's section of `CHANGELOG.md`, and both release workflows publish that as the body of the GitHub release, followed by a standing tail -- `dev/release-notes-tail.md` for a release, `dev/release-notes-tail-prerelease.md` for a test build -- with `@VERSION@` substituted. The tails are the part that does not change from release to release: how to install it, and what to do afterwards.
+
+Each workflow runs the extractor twice: once as a gate before building anything, once to write the body. The same script both times, so the gate cannot pass a section the body step would then fail to produce. It refuses three things: a version with no section, an empty section, and a section still carrying the `_Summary goes here._` placeholder, which would otherwise be published as the release notes.
+
+`dev/scripts/check-news.sh` is the other gate. It compares `<news>` against the same element at the previous tag, and unchanged means nobody wrote one for this version. It is a hard failure in `release.yml`, which reaches every installed device, and a warning in `prerelease.yml`, where tagging `rc2` an hour after `rc1` should not require rewriting the information dialog in between.
+
+Both scripts run locally, which is the point of them being scripts rather than steps. Run either one before you tag and you know what CI will say. `workflow_dispatch` on `release.yml` does the same from the other end: it builds and checks everything and creates no release, so a run before the tag exists proves the release would work.
+
 ## What each tag does
 
-`v*` triggers `release.yml`: runs the tests, checks the tag against `addon.xml`, builds the add-on, the static Kodi repository and the landing page, publishes all of it to GitHub Pages, and attaches the zip to a GitHub release. **This is the one that reaches installed devices.** Kodi offers an update when the published version is higher than the installed one, so the bump is what makes devices pick it up.
+`v*` triggers `release.yml`: runs the tests, checks the tag against `addon.xml`, puts the changelog and `<news>` gates in front of everything else, builds the add-on, the static Kodi repository and the landing page, publishes all of it to GitHub Pages, and attaches the zip to a GitHub release with this version's changelog section as its body. **This is the one that reaches installed devices.** Kodi offers an update when the published version is higher than the installed one, so the bump is what makes devices pick it up.
 
 `p*` and `*-pre` trigger `prerelease.yml`: runs the tests, checks the version, builds the zip and attaches it to a GitHub prerelease. It touches neither Pages nor the add-on repository, so no installed Kodi is ever offered it. Testers install the zip by hand and get the real release later through the repository, which supersedes the `~` version on its own.
 
@@ -38,8 +49,11 @@ The landing page and the add-on repository are one GitHub Pages site, and a depl
 ## A pre-release, step by step
 
     dev/scripts/bump-version.sh 1.0.0~beta1
-    # write the CHANGELOG summary and the <news> element
+    # write this version's prose into CHANGELOG.md, above '### Commits'
+    # write <news> in addon.xml
     make test
+    dev/scripts/changelog-section.sh 1.0.0~beta1   # what the release body will say
+    dev/scripts/check-news.sh
     git add -A && git commit -m "Release 1.0.0~beta1"
     git tag p1.0.0-beta1
     git push origin main
@@ -50,8 +64,11 @@ Then point testers at the GitHub release page for the zip.
 ## A release, step by step
 
     dev/scripts/bump-version.sh 1.0.0
-    # write the CHANGELOG summary and the <news> element
+    # write this version's prose into CHANGELOG.md, above '### Commits'
+    # write <news> in addon.xml
     make test
+    dev/scripts/changelog-section.sh 1.0.0        # what the release body will say
+    dev/scripts/check-news.sh
     git add -A && git commit -m "Release 1.0.0"
     git tag v1.0.0
     git push origin main

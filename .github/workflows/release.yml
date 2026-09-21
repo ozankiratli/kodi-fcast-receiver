@@ -34,24 +34,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # check-news.sh reads addon.xml at the previous tag. A shallow clone has
+          # no tags, so the gate would pass by having nothing to compare against.
+          fetch-depth: 0
 
       - name: Run tests
         run: make test
 
-      - name: Check the tag matches addon.xml
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Work out the version and check the tag agrees with it
+        id: version
         run: |
+          set -euo pipefail
           addon_version=$(sed -n 's/.*<addon .*version="\([^"]*\)".*/\1/p' addon.xml)
-          # See the note at the top: the tag v1.0.0-beta1 stands for the
-          # add-on version 1.0.0~beta1, since '~' cannot appear in a git ref.
-          # Done with sed rather than ${x/-/~}, where bash expands the tilde
-          # to $HOME and quietly produces 1.0.0/home/runnerbeta1.
-          expected=$(printf '%s' "${GITHUB_REF_NAME#v}" | sed 's/-/~/')
-          if [ "$addon_version" != "$expected" ]; then
-            echo "tag $GITHUB_REF_NAME expects addon.xml version $expected," >&2
-            echo "but addon.xml says $addon_version" >&2
-            exit 1
+          [ -n "$addon_version" ] || { echo "no version found in addon.xml" >&2; exit 1; }
+
+          # On a tag the tag decides. On workflow_dispatch there is none, and the run
+          # builds and checks everything without publishing.
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            # See the note at the top: the tag v1.0.0-beta1 stands for the
+            # add-on version 1.0.0~beta1, since '~' cannot appear in a git ref.
+            # Done with sed rather than ${x/-/~}, where bash expands the tilde
+            # to $HOME and quietly produces 1.0.0/home/runnerbeta1.
+            expected=$(printf '%s' "${GITHUB_REF_NAME#v}" | sed 's/-/~/')
+            if [ "$addon_version" != "$expected" ]; then
+              echo "tag $GITHUB_REF_NAME expects addon.xml version $expected," >&2
+              echo "but addon.xml says $addon_version" >&2
+              exit 1
+            fi
           fi
+
+          echo "version=$addon_version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $addon_version"
+
+      # Refuses to release a version the changelog does not describe. The same
+      # extractor that writes the body below, so this gate cannot pass a section the
+      # body step would then fail to read.
+      - name: The changelog describes this version
+        run: dev/scripts/changelog-section.sh "${{ steps.version.outputs.version }}" > /dev/null
+
+      # Kodi shows <news> and nothing else: the changelog is not shipped, and the
+      # release body is not reachable from inside Kodi. Unchanged since the previous
+      # tag means nobody wrote one for this version.
+      - name: The news element has been written for this version
+        run: dev/scripts/check-news.sh
+
 
       - uses: actions/configure-pages@v6
         id: pages
@@ -71,11 +98,29 @@ jobs:
         with:
           path: repo
 
+      - name: Build the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # This version's CHANGELOG section, then the standing tail. Runs on every
+          # trigger and not only on a tag, so a rehearsal proves the notes come out
+          # before the tag exists.
+          dev/scripts/changelog-section.sh "$VERSION" > dist/RELEASE_NOTES.md
+          printf '\n' >> dist/RELEASE_NOTES.md
+          sed -e "1,/^-->$/d" -e "s|@VERSION@|${VERSION}|g" \
+              dev/release-notes-tail.md >> dist/RELEASE_NOTES.md
+          [ -s dist/RELEASE_NOTES.md ] || { echo "the release notes came out empty" >&2; exit 1; }
+          echo "::group::release body"
+          cat dist/RELEASE_NOTES.md
+          echo "::endgroup::"
+
       - name: Attach the add-on zip to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*.zip
+          body_path: dist/RELEASE_NOTES.md
 
   deploy:
     needs: build

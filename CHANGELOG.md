@@ -1,8 +1,12 @@
 # Changelog
 
-Kodi shows the `<news>` element from `addon.xml` in the add-on's information dialog, not this file. This is the fuller history, with the commits behind each release: `dev/scripts/bump-version.sh` adds a new section from the git log, and the prose under each heading is written by hand.
+Each version's section here **is** its release notes: `dev/scripts/changelog-section.sh` extracts it and both release workflows publish it as the body of the GitHub release. Nothing else has to be written for them.
 
-## p0.9.9-pre (2026-08-15)
+`dev/scripts/bump-version.sh` opens the section and fills in the commits since the last tag under `### Commits`. Write the prose above that heading, not over it -- the commit list stays as the record of what actually landed.
+
+Kodi itself shows neither this file nor the release body. What it shows in the add-on's information dialog is the `<news>` element in `addon.xml`, which is written by hand for every release and gated by `dev/scripts/check-news.sh`.
+
+## [0.9.9~pre] - 2026-08-15
 
 A test build for FCast protocol **v3**. Not published to the add-on repository: install the zip by hand if you want to try it.
 
@@ -23,6 +27,7 @@ A test build for FCast protocol **v3**. Not published to the add-on repository: 
 
 **Failures are visible.** Everything the add-on logged was `LOGDEBUG`, which Kodi hides unless debug logging is on, so a failed download, a viewer that never opened, or discovery that never registered all looked exactly like working. Those now log at warning level, and connections at info.
 
+### Commits
 - (b64516) Tests for image viewer updated
 - (6393f2) README updated
 - (1c8086) Keep awake when picture is shown added as a feature
@@ -76,18 +81,24 @@ A test build for FCast protocol **v3**. Not published to the add-on repository: 
 - (9e616d) protocol v3 changes and bug fixes
 - (4f3d3a) protocol v3 classes added
 
-## v0.2.2-beta (2026-08-15)
+---
+
+## [0.2.2-beta] - 2026-08-15
 
 - Fixed the add-on interrupting playback it did not start. Kodi delivers playback callbacks for everything it plays, and the add-on answered each one by issuing a stop. With gapless audio the callback for a finished track arrives while the next one is already playing, so the stop killed the track that had just started, cutting an album to a few seconds a song
 - The add-on now only acts on playback it started itself. Casting is unchanged; local music and video are left alone entirely, including the playback position updates that were being sent to connected senders for media nobody had cast
 
-## v0.2.1-beta (2026-08-15)
+---
+
+## [0.2.1-beta] - 2026-08-15
 
 - Fixed a crash whenever Kodi played media the add-on did not start. The add-on receives playback callbacks for everything Kodi plays, not only what was cast to it, and raised AttributeError on every one of them
 - Fixed a second crash in the same path: Kodi raises "Kodi is not playing any media file" from getTime() once the player has moved on, which happens routinely with gapless audio where the playback-started callback arrives after playback has already advanced
 - Both were reported from the field while playing local music, and neither affected casting itself, but each logged an error and skipped a playback update
 
-## v0.2.0-beta (2026-08-13)
+---
+
+## [0.2.0-beta] - 2026-08-13
 
 - Fixed packet reassembly: FCast messages split across TCP reads were corrupted, which desynchronised the stream and dropped the connection. Larger Play messages hit this almost every time, which is why Grayjay and other newer senders appeared to stop working
 - Unknown opcodes, unimplemented opcodes and unrecognised message fields are now ignored instead of closing the connection, so senders on protocol v3 are no longer disconnected mid-handshake
@@ -100,7 +111,9 @@ A test build for FCast protocol **v3**. Not published to the add-on repository: 
 - Start-up failures are now reported on screen and logged with a full traceback, instead of leaving the service silently dead
 - Add-on can now be installed from a repository, so Kodi keeps it up to date automatically
 
-## v0.1.1-beta (2026-04-04)
+---
+
+## [0.1.1-beta] - 2026-04-04
 
 - mDNS broadcasting: receiver is now discoverable by sender devices on the local network
 - Speed control: playback speed clamped to Kodi's supported range (0.8x–1.5x)
@@ -109,3 +122,9 @@ A test build for FCast protocol **v3**. Not published to the add-on repository: 
 - Fixed stream cancellation freeze: stopping or switching streams mid-play no longer freezes Kodi
 - Fixed shared session listeners bug that could cause duplicate event handling with multiple connections
 - Recommended setting: enable Settings → Player → Videos → Sync playback to display for compatibility
+
+[0.9.9~pre]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/p0.9.9-pre
+[0.2.2-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.2.2-beta
+[0.2.1-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.2.1-beta
+[0.2.0-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.2.0-beta
+[0.1.1-beta]: https://github.com/ozankiratli/kodi-fcast-receiver/releases/tag/v0.1.1-beta

@@ -51,9 +51,12 @@ Grab the zip from the [releases page](https://github.com/ozankiratli/kodi-fcast-
 
 ### Kodi
 
-Enable the following Kodi setting for speed control:
+The receiver needs nothing changed in Kodi to work. One setting is worth knowing about, because it is a trade-off rather than an improvement — **Settings → Player → Videos → Sync playback to display**, which Kodi leaves off:
 
-* **Settings → Player → Videos → Sync playback to display** — set to **On**
+* **Off** — audio and video stay in step for the length of a film. Playback speed sent from a sender does nothing.
+* **On** — playback speed from a sender works, clamped to the 0.8x to 1.5x Kodi supports. Audio and video drift apart over a long playback, often far enough to notice somewhere after the forty minute mark.
+
+The drift is Kodi's doing with that setting rather than the receiver's, and nothing else in the add-on depends on it. Leave it off unless you change playback speed from your phone.
 
 ### Add-on settings
 
@@ -76,6 +79,7 @@ Enable the following Kodi setting for speed control:
 * **HLS and DASH detection** — Both are now recognised from the container the sender declares as well as from the URL extension.
 * **mDNS on LibreELEC and CoreELEC** — Discovery works against whichever D-Bus binding the platform ships: `python-dbus` on Debian and Raspbian, DBussy on LibreELEC and CoreELEC, with an `avahi-publish` fallback. A missing binding no longer stops the add-on from starting. The service now also advertises TXT records, which some senders require.
 * **Leaked connection threads** — A disconnected client left a thread spinning for the lifetime of the Kodi session.
+* **A sender that leaves the network** -- A sender that changes network mid-stream does not close its connection, because it is no longer there to close it. Nothing on this end noticed: the connection, its thread and its place in the broadcast list survived for the rest of the Kodi session. The connection is now timed out, and if that sender was also serving the stream -- casting a file from its own machine, rather than handing Kodi a public URL -- playback is stopped rather than left reading an address that will never answer again. Playback from anywhere else carries on: a phone going to sleep is not a reason to stop the film.
 * **Silent start-up failures** — Errors during start-up are reported on screen and logged with a full traceback, instead of leaving the service quietly dead.
 * **Speed control clamping** — Playback speed is now clamped to the range supported by Kodi (0.8x – 1.5x). Requests below 0.8x are rounded up and requests above 1.5x are rounded down, preventing out-of-range errors.
 * **mDNS / device discovery** — The receiver broadcasts via mDNS so it is discoverable by sender devices on the local network.

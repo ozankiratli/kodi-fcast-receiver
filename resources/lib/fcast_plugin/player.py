@@ -197,11 +197,14 @@ class FCastPlayer(xbmc.Player):
             duration=duration,
             itemIndex=self.get_item_index() if self.get_item_index else None
         )
-        for session in self.sessions:
+        for session in list(self.sessions):
             session.send_playback_update(pb_message)
 
     def addSession(self, session: FCastSession):
         self.sessions.append(session)
 
     def removeSession(self, session: FCastSession):
-        self.sessions.remove(session)
+        # Tolerant of a session that is not there: a connection can now be
+        # written off from more than one place, and list.remove() raises.
+        if session in self.sessions:
+            self.sessions.remove(session)

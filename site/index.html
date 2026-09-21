@@ -253,10 +253,25 @@
     by hand. See <a href="#discovery">Discovery</a> below.
   </p>
 
-  <h3 id="kodi-setting">One Kodi setting worth changing</h3>
+  <h3 id="kodi-setting">One Kodi setting to decide about</h3>
   <p>
-    <b>Settings → Player → Videos → Sync playback to display</b> — set to <b>On</b>.
-    Playback speed control from a sender depends on it.
+    The receiver needs nothing changed in Kodi to work. There is one setting worth knowing
+    about, because it is a trade-off rather than an improvement — <b>Settings → Player →
+    Videos → Sync playback to display</b>, which Kodi leaves off:
+  </p>
+  <ul>
+    <li>
+      <b>Off</b> — audio and video stay in step for the length of a film. Playback speed sent
+      from a sender does nothing.
+    </li>
+    <li>
+      <b>On</b> — playback speed from a sender works. Audio and video drift apart over a long
+      playback, often far enough to notice somewhere after the forty minute mark.
+    </li>
+  </ul>
+  <p>
+    The drift is Kodi's doing with that setting rather than the receiver's, and nothing else in
+    the add-on depends on it. Leave it off unless you change playback speed from your phone.
   </p>
 
   <h3 id="settings">Add-on settings</h3>
@@ -366,12 +381,30 @@
     </p>
   </details>
 
+  <details id="drift">
+    <summary>Audio and video drift apart during a long film</summary>
+    <p>
+      Turn <b>Settings → Player → Videos → Sync playback to display</b> off. That setting runs
+      playback from the display's clock, and over a long film the two clocks pull apart — usually
+      far enough to notice somewhere after the forty minute mark. It is Kodi's doing with that
+      setting rather than anything the receiver does, and the receiver does not need it.
+    </p>
+    <p>
+      The only thing turning it off costs you is playback speed control from a sender.
+    </p>
+  </details>
+
   <details>
     <summary>Playback speed from the sender does nothing</summary>
     <p>
-      Turn on <b>Settings → Player → Videos → Sync playback to display</b>. Kodi supports speeds
-      between 0.8× and 1.5×; anything a sender asks for outside that range is clamped to the
-      nearest end rather than rejected.
+      Speed control needs <b>Settings → Player → Videos → Sync playback to display</b> turned on.
+      Kodi supports speeds between 0.8× and 1.5×; anything a sender asks for outside that range is
+      clamped to the nearest end rather than rejected.
+    </p>
+    <p>
+      Turning it on has a cost of its own — see
+      <a href="#drift">audio and video drifting apart</a> above. Nothing else about the receiver
+      needs it, so if you do not change speed from your phone, leave the setting alone.
     </p>
   </details>
 

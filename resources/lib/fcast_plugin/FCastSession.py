@@ -3,6 +3,7 @@ import inspect
 import json
 import socket
 import struct
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import xbmc
@@ -51,6 +52,19 @@ class Event(str, Enum):
 LENGTH_BYTES = 4
 MAXIMUM_PACKET_LENGTH = 32000
 
+# How long output may sit with a socket that will not take it before the peer
+# is written off. A sender that walks off the network acknowledges nothing
+# further, so the socket stops accepting writes while never reporting an error,
+# and at twenty position updates a second there is always something waiting to
+# be written. This is what turns that silence into a decision, on any platform
+# and whatever size the packets happen to be.
+#
+# Well past any hiccup: the control channel carries under two kilobytes a
+# second, so a peer that has absorbed none of it for this long is not a slow
+# peer, it is an absent one. On Linux the socket itself reaches the same
+# conclusion sooner -- see TCP_USER_TIMEOUT where the connection is accepted.
+SEND_STALL_TIMEOUT = 30.0
+
 # Highest protocol version this receiver implements. v3 is required rather
 # than optional: senders drive their own queue from the MediaItemEnd event,
 # and events only exist from v3, so a v2 receiver can never tell a sender that
@@ -90,6 +104,13 @@ class FCastSession:
     packet_length: int = 0
     client: Optional[socket.socket] = None
     state: SessionState = SessionState.DISCONNECTED
+    # The address this connection came from. Used to decide whether a sender
+    # that has gone away was also the one serving what is on screen.
+    peer: str = ''
+    # Output the socket has not taken yet, and when any of it last moved.
+    # See flush().
+    outbox: bytearray
+    last_progress_at: float = 0.0
     # What the sender announced, and what the two of us settled on. Until a
     # Version message arrives, assume the oldest version that has one.
     peer_version: int = 1
@@ -102,9 +123,12 @@ class FCastSession:
 
     __listeners: Dict[str, List[Callable[[Any, Any], Any]]] = {}
 
-    def __init__(self, client: socket.socket, get_play_data=None):
+    def __init__(self, client: socket.socket, get_play_data=None, peer: str = ''):
         self.__listeners = {}
         self.client = client
+        self.peer = peer
+        self.outbox = bytearray()
+        self.last_progress_at = time.time()
         self.state = SessionState.WAITING_FOR_LENGTH
         self.sent_initial = False
         self.subscribed_events = set()
@@ -117,9 +141,28 @@ class FCastSession:
 
     def close(self):
         if self.client:
-            self.client.close()
+            try:
+                self.client.close()
+            except OSError:
+                # Already gone. Nothing here is worth failing a teardown for.
+                pass
         self.client = None
+        self.outbox = bytearray()
         self.state = SessionState.DISCONNECTED
+
+    @property
+    def is_connected(self) -> bool:
+        """Whether this session still has a socket worth talking to.
+
+        The thread reading the connection watches this, so anything that gives
+        up on the peer -- here or in flush() -- ends that thread too.
+        """
+        return self.client is not None
+
+    def disconnect(self, reason: str) -> None:
+        """Give up on this session, saying why."""
+        log(f"Session with {self.peer or 'sender'} ended: {reason}", xbmc.LOGINFO)
+        self.close()
 
     def send_playback_update(self, value: PlayBackUpdateMessage):
         self.__send(OpCode.PLAYBACK_UPDATE, value)
@@ -168,24 +211,62 @@ class FCastSession:
         if not self.client:
             return
 
-        # FCast packet header
-        json_message = json.dumps(message,default=default) if message else None
-        body_size = (len(json_message) if json_message else 0) + 1
-        header = struct.pack("<IB", body_size, opcode.value)
+        # Measured on the encoded bytes rather than on the string they came
+        # from. The two agree today, because json.dumps escapes everything
+        # outside ASCII, so this fixes nothing on its own -- it removes the
+        # dependency. A header that understates its body by a single byte
+        # desynchronizes the sender, and that is too much to rest on a default
+        # argument somewhere else.
+        body = json.dumps(message, default=default).encode("utf-8") if message else b""
+        # The length covers the opcode byte as well as the body.
+        packet = struct.pack("<IB", len(body) + 1, opcode.value) + body
 
-        packet = header
+        if not self.outbox:
+            # Output starts waiting now, so the stall clock runs from here
+            # rather than from whenever this session last had something to say.
+            self.last_progress_at = time.time()
+        self.outbox += packet
+        self.flush()
 
-        # Append data to FCast packet, if any
-        if json_message:
-            packet += json_message.encode("utf-8")
+    def flush(self) -> None:
+        """Write as much of the pending output as the socket will accept.
 
-        # Send the packet
+        send() on a non-blocking socket writes what fits and reports how much
+        that was, which is not always the whole packet. Keeping the remainder
+        for the next call is what holds the sender's stream in frame: a
+        truncated packet desynchronizes it exactly the way a truncated read
+        desynchronized us before the reassembly fix. Nothing used to keep it,
+        and nothing noticed, because the socket only fills when the peer stops
+        reading -- which is the case this is about.
+
+        Nothing fits at all once the peer has stopped acknowledging anything,
+        which is what a sender that changed network looks like from here. So
+        output that has not moved for SEND_STALL_TIMEOUT is the answer to "is
+        this peer still there", on platforms where the socket itself will not
+        say so for hours.
+        """
+        if not self.client or not self.outbox:
+            return
+
         try:
-            self.client.send(packet)
-        except Exception as e:
-            log("Error while sending packet to client, destroying socket...")
-            log(str(e))
-            self.client = None
+            while self.outbox:
+                sent = self.client.send(self.outbox)
+                if not sent:
+                    break
+                del self.outbox[:sent]
+                self.last_progress_at = time.time()
+        except (BlockingIOError, InterruptedError):
+            # The socket will take no more for now. What is left goes out on a
+            # later call; this is not an error and must not end the session.
+            pass
+        except OSError as e:
+            self.disconnect(f"send failed: {e}")
+            return
+
+        if self.outbox and time.time() - self.last_progress_at > SEND_STALL_TIMEOUT:
+            self.disconnect(
+                f"{len(self.outbox)} bytes unsent for "
+                f"{SEND_STALL_TIMEOUT:.0f}s, peer is not reading")
 
     def process_bytes(self, received_bytes: bytes):
         if not received_bytes or len(received_bytes) <= 0:
@@ -213,9 +294,7 @@ class FCastSession:
             self.buffer = bytes()
 
             if self.packet_length > MAXIMUM_PACKET_LENGTH:
-                if self.client:
-                    self.client.close()
-                self.state = SessionState.DISCONNECTED
+                self.close()
                 raise Exception("Packet length %d exceeds maximum packet length %d" % (self.packet_length, MAXIMUM_PACKET_LENGTH))
             
             if bytes_remaining > 0:

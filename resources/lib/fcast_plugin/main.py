@@ -28,8 +28,29 @@ sessions: List[FCastSession] = []
 # Constants
 FCAST_HOST = ''
 FCAST_PORT = 46899
-FCAST_TIMEOUT = 60 * 1000
 FCAST_BUFFER_SIZE = 32000
+
+# What a sender that has left the network looks like from this end: no FIN, no
+# RST, nothing to read, and a connection that would otherwise hold its thread
+# and its place in the broadcast list for as long as Kodi runs. These hand the
+# question to the kernel, which is the only party that can see that nothing is
+# coming back.
+#
+# KEEPALIVE_* covers a connection with nothing outstanding. USER_TIMEOUT_MS
+# covers one with data already written, which during playback is nearly always
+# -- position updates go out twenty times a second.
+KEEPALIVE_IDLE = 20       # seconds of silence before the first probe
+KEEPALIVE_INTERVAL = 5    # seconds between probes
+KEEPALIVE_COUNT = 3       # probes unanswered before the peer is written off
+USER_TIMEOUT_MS = 20000   # how long written data may sit unacknowledged
+
+# How long to leave a player alone after asking it to stop. Kodi tears the
+# player down on its own thread, and a stream whose source has gone off the
+# network holds that teardown open for as long as the socket takes to give up.
+# Every player call made meanwhile queues behind the same lock, so polling
+# through it reports nothing that has changed and parks one more thread inside
+# Kodi for the duration.
+STOP_SETTLE = 30.0
 
 plugin_handle = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else None
 
@@ -51,6 +72,15 @@ current_play_message: Optional[PlayMessage] = None
 
 # Last volume published to senders, so the poll only speaks up on a change.
 last_volume: Optional[float] = None
+
+# Where the sender that asked for what is on screen connected from. A sender
+# that serves the media itself takes the stream with it when it leaves, and
+# this is what says whether the sender that just went away was that one.
+current_play_peer: Optional[str] = None
+
+# When we last asked Kodi to stop, so the poll can stay out of a teardown that
+# has not finished. Zero means nothing is pending. See STOP_SETTLE.
+stop_requested_at: float = 0.0
 
 # The queue a sender handed over, if any. None when playing a single item.
 playlist: Optional[Playlist] = None
@@ -109,13 +139,43 @@ def broadcast_play_update() -> None:
     for session in list(sessions):
         session.send_play_update(get_current_play_data())
 
+def stop_pending() -> bool:
+    """Whether a stop we asked for has yet to take effect.
+
+    Kodi answers a stop on its own thread and holds the player while it does,
+    so every call made in the meantime -- isPlaying() and getTime() twenty
+    times a second among them -- waits on the same lock. When the source is a
+    machine that has gone off the network that wait is however long its socket
+    takes to give up, so this keeps the poll out of it. It clears as soon as
+    Kodi reports the stop, which for anything still reachable is immediate.
+    """
+    if not stop_requested_at:
+        return False
+    if player and not player.owns_playback:
+        return False
+    return time.time() - stop_requested_at < STOP_SETTLE
+
+def stop_playback() -> None:
+    """Ask Kodi to stop what is playing, and abandon any queue behind it.
+
+    On a thread of its own, because the builtin is handed to Kodi's
+    application thread and waits for it to be taken -- which is exactly what
+    a thread with a connection to answer for must not do.
+    """
+    global playlist, stop_requested_at
+    playlist = None
+    stop_requested_at = time.time()
+    Thread(target=lambda: xbmc.executebuiltin('PlayerControl(Stop)'),
+           daemon=True).start()
+
 def check_player():
     global player
     log("Starting player thread")
     monitor = xbmc.Monitor()
     ticks = 0
     while not monitor.abortRequested():
-        if player and player.owns_playback and player.isPlaying():
+        if (not stop_pending() and player and player.owns_playback
+                and player.isPlaying()):
             try:
                 # Update the current time if it has changed
                 if int(player.getTime()) != player.prev_time:
@@ -382,7 +442,10 @@ def handle_play(session: FCastSession, message = None):
     if not message:
         return
 
-    global playlist
+    global playlist, current_play_peer
+    # Noted here rather than in play_message, so that the items a playlist
+    # goes on to start stay attributed to the sender that handed it over.
+    current_play_peer = session.peer if session else None
     if is_playlist(message):
         start_playlist(message)
         return
@@ -506,12 +569,17 @@ def play_message(message = None):
         current_play_message = message
 
         def do_play():
+            global stop_requested_at
             if player.isPlaying():
+                # Marked as ours so the 20Hz poll stays out of the teardown,
+                # which is the one thread that must keep running through it.
+                stop_requested_at = time.time()
                 xbmc.executebuiltin('PlayerControl(Stop)')
                 timeout = 50  # 5 seconds max
                 while player.isPlaying() and timeout > 0:
                     xbmc.sleep(100)
                     timeout -= 1
+            stop_requested_at = 0.0
             player.start_time = start_time
             # From here the callbacks Kodi sends us are about our own cast.
             player.owns_playback = True
@@ -561,9 +629,7 @@ def handle_stop(session: FCastSession, message = None):
         broadcast_playback_state(PlayBackState.IDLE)
         return
     if player:
-        def do_stop():
-            xbmc.executebuiltin('PlayerControl(Stop)')
-        Thread(target=do_stop).start()
+        stop_playback()
 
 def handle_pause(session: FCastPlayer, message = None):
     global player
@@ -710,6 +776,82 @@ def handle_speed(session: FCastSession, message: SetSpeedMessage):
     except Exception as e:
         log(f"Error setting speed: {e}")
 
+def configure_keepalive(conn: socket.socket) -> None:
+    """Have the kernel give up on a peer that has stopped answering.
+
+    Nothing else will. A sender that changes network -- Wi-Fi to cellular, or
+    between access points -- leaves the connection half open: the socket stays
+    established, recv() reports only that there is nothing to read, and the
+    session, its thread and its place in the broadcast list survive for as long
+    as Kodi runs.
+
+    Everything past SO_KEEPALIVE is platform-specific and simply absent from
+    the socket module where the platform does not have it, so each is set only
+    if it is there. Kodi runs on more than Linux, and an AttributeError here
+    would take down the connection at the moment it was accepted.
+    """
+    try:
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError as e:
+        log(f"Could not enable keepalive: {e}", xbmc.LOGWARNING)
+        return
+
+    for name, value in (('TCP_KEEPIDLE', KEEPALIVE_IDLE),
+                        ('TCP_KEEPINTVL', KEEPALIVE_INTERVAL),
+                        ('TCP_KEEPCNT', KEEPALIVE_COUNT),
+                        ('TCP_USER_TIMEOUT', USER_TIMEOUT_MS)):
+        option = getattr(socket, name, None)
+        if option is None:
+            continue
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, option, value)
+        except OSError as e:
+            log(f"Could not set {name}: {e}", xbmc.LOGWARNING)
+
+def media_served_by(peer: Optional[str]) -> bool:
+    """Whether the stream on screen is coming from this sender's own machine.
+
+    A sender that hands Kodi a public URL leaves nothing behind when it
+    disconnects, and playback carries on: a phone going to sleep is not a
+    reason to stop the film. A sender serving the media itself is the other
+    case entirely. Once it is gone the stream is gone with it, and what is
+    left is a player reading an address that will never answer again --
+    which is the state this add-on used to sit in indefinitely.
+
+    Matched against the address the connection came from, so only a URL naming
+    an address literal can answer this. Naming a host would mean resolving it,
+    and a name lookup is not something to do on the way out of a connection,
+    so those are left alone.
+    """
+    if not peer or not current_play_message or not current_play_message.url:
+        return False
+    return (urlparse(current_play_message.url).hostname or '') == peer
+
+def on_sender_lost(session: FCastSession, peer: str) -> None:
+    """Wind up a session whose sender has gone, and let go of its stream."""
+    if player:
+        player.removeSession(session)
+    # Also directly: the player holds this same list, but it is the list that
+    # every broadcast walks, and a session left in it when the player happened
+    # not to be up would be written to for the rest of the Kodi session.
+    if session in sessions:
+        sessions.remove(session)
+    session.close()
+
+    if any(other.peer == peer and other.is_connected for other in list(sessions)):
+        # The same machine is already back on a new connection: it changed
+        # network rather than left, and what is playing is still wanted.
+        log(f"{peer} is connected again, leaving playback alone")
+        return
+
+    if not (player and player.owns_playback and media_served_by(peer)):
+        return
+
+    log(f"Stopping playback: {peer} was serving it and is gone", xbmc.LOGINFO)
+    notify('Sender disconnected, stopping', xbmcgui.NOTIFICATION_WARNING)
+    stop_playback()
+    broadcast_playback_state(PlayBackState.IDLE)
+
 # Connection handler thread function
 def connection_handler(conn: socket.socket, addr):
     global player, http_server
@@ -723,7 +865,9 @@ def connection_handler(conn: socket.socket, addr):
     log("Connection from %s" % addr[0], xbmc.LOGINFO)
     notify("Connection from %s" % addr[0])
 
-    session = FCastSession(conn, get_play_data=get_current_play_data)
+    configure_keepalive(conn)
+    session = FCastSession(conn, get_play_data=get_current_play_data,
+                           peer=addr[0])
 
     session.on(Event.PLAY, handle_play)
     session.on(Event.STOP, handle_stop)
@@ -743,8 +887,11 @@ def connection_handler(conn: socket.socket, addr):
     if player:
         player.addSession(session)
 
-    # Receive data from the client and process it
-    while not monitor.abortRequested():
+    # Receive data from the client and process it. The session's own view of
+    # whether it still has a peer ends this too: a socket the kernel has timed
+    # out, or output that has backed up because nothing is reading it, are both
+    # ways for a sender to be gone that recv() will never report.
+    while not monitor.abortRequested() and session.is_connected:
         try:
             buff = conn.recv(FCAST_BUFFER_SIZE)
             if not buff:
@@ -757,16 +904,25 @@ def connection_handler(conn: socket.socket, addr):
         except BlockingIOError:
             # Normal behavior. Prevents blocking
             pass
+        except OSError as e:
+            # What the kernel says once it has given up on the peer, and what
+            # a reset connection looks like. Neither is a fault of ours.
+            log("Connection from %s lost: %s" % (addr[0], e), xbmc.LOGINFO)
+            break
         except Exception as e:
             log(str(e), xbmc.LOGERROR)
             break
 
+        # Anything the socket would not take earlier goes out here. Without
+        # this, a packet held back by a full socket buffer would wait for the
+        # next one to be sent -- which on a session that has gone quiet never
+        # comes, and the peer is left with half a packet.
+        session.flush()
+
         if monitor.waitForAbort(0.05):
             break
 
-    if player:
-        player.removeSession(session)
-    session.close()
+    on_sender_lost(session, addr[0])
     log("Connection closed from %s" % addr[0], xbmc.LOGINFO)
     notify("Connection closed from %s" % addr[0])
 
@@ -778,8 +934,12 @@ def main():
 
     # Create a socket for the FCast receiver
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Non-blocking, and left that way. settimeout() put a minute back on it,
+    # which accept() would then sit out whenever the selector reported a
+    # connection that was gone again by the time we asked for it -- and a
+    # connection reset in that gap is exactly what a sender changing network
+    # produces. No other sender could connect for the length of that wait.
     s.setblocking(False)
-    s.settimeout(FCAST_TIMEOUT / 1000)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     player = FCastPlayer(sessions, get_play_data=get_last_play_data,
@@ -821,7 +981,13 @@ def main():
         # Check for connections
         for key, mask in events:
             if key.data is None:
-                conn, addr = s.accept()
+                try:
+                    conn, addr = s.accept()
+                except OSError as e:
+                    # The pending connection was gone by the time we asked for
+                    # it. Nothing to do but carry on listening.
+                    log(f"Accept failed: {e}", xbmc.LOGWARNING)
+                    continue
                 conn.setblocking(False)
                 # Create a new thread for the connection
                 t = Thread(target=connection_handler, args=(conn, addr))
